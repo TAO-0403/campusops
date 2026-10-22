@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -195,3 +197,107 @@ def test_mutating_request_requires_csrf_token() -> None:
         response = client.post("/api/requests", json=request_payload(client))
 
     assert response.status_code == 403
+
+
+def test_complete_return_resubmit_approval_history() -> None:
+    with TestClient(app) as applicant:
+        applicant_csrf = sign_in(applicant, APPLICANT_A, APPLICANT_A_PASSWORD)
+        created = create_request(applicant, applicant_csrf)
+        request_id = created["id"]
+        assert applicant.post(f"/api/requests/{request_id}/submit", headers={"X-CSRF-Token": applicant_csrf}).json()["status"] == "Submitted"
+
+    with TestClient(app) as admin:
+        admin_csrf = sign_in(admin, ADMIN, ADMIN_PASSWORD)
+        returned = admin.post(f"/api/requests/{request_id}/return", json={"reason": "Please clarify the teaching-lab use."}, headers={"X-CSRF-Token": admin_csrf})
+        assert returned.status_code == 200
+        assert returned.json()["status"] == "Returned"
+
+    with TestClient(app) as applicant:
+        applicant_csrf = sign_in(applicant, APPLICANT_A, APPLICANT_A_PASSWORD)
+        saved = applicant.put(f"/api/requests/{request_id}", json=request_payload(applicant, amount="138.40"), headers={"X-CSRF-Token": applicant_csrf})
+        assert saved.status_code == 200
+        assert saved.json()["status"] == "Returned"
+        assert saved.json()["amount"] == "138.40"
+        resubmitted = applicant.post(f"/api/requests/{request_id}/resubmit", json={"comment": "Added the requested teaching details."}, headers={"X-CSRF-Token": applicant_csrf})
+        assert resubmitted.status_code == 200
+        assert resubmitted.json()["status"] == "Submitted"
+        assert applicant.put(f"/api/requests/{request_id}", json=request_payload(applicant), headers={"X-CSRF-Token": applicant_csrf}).status_code == 409
+
+    with TestClient(app) as admin:
+        admin_csrf = sign_in(admin, ADMIN, ADMIN_PASSWORD)
+        approved = admin.post(f"/api/requests/{request_id}/approve", json={"comment": "Approved for the spring labs."}, headers={"X-CSRF-Token": admin_csrf})
+        assert approved.status_code == 200
+        assert approved.json()["status"] == "Approved"
+        assert admin.post(f"/api/requests/{request_id}/approve", json={}, headers={"X-CSRF-Token": admin_csrf}).status_code == 409
+        detail = admin.get(f"/api/requests/{request_id}").json()
+
+    transitions = [(event["previous_status"], event["new_status"]) for event in detail["events"] if event["event_type"] in ("Submitted", "Returned", "Resubmitted", "Approved")]
+    assert transitions == [("Draft", "Submitted"), ("Submitted", "Returned"), ("Returned", "Submitted"), ("Submitted", "Approved")]
+    decisions = {event["event_type"]: event for event in detail["events"] if event["event_type"] in ("Returned", "Resubmitted", "Approved")}
+    assert decisions["Returned"]["actor_name"] == "Casey Lee"
+    assert decisions["Returned"]["comment"] == "Please clarify the teaching-lab use."
+    assert decisions["Resubmitted"]["actor_name"] == "Alex Morgan"
+    assert decisions["Resubmitted"]["comment"] == "Added the requested teaching details."
+    assert decisions["Approved"]["comment"] == "Approved for the spring labs."
+    assert all(event["created_at"] for event in decisions.values())
+
+
+def test_return_requires_nonblank_reason_and_only_submitted_requests_can_transition() -> None:
+    with TestClient(app) as applicant:
+        applicant_csrf = sign_in(applicant, APPLICANT_A, APPLICANT_A_PASSWORD)
+        draft = create_request(applicant, applicant_csrf)
+        assert applicant.post(f"/api/requests/{draft['id']}/resubmit", json={}, headers={"X-CSRF-Token": applicant_csrf}).status_code == 409
+
+    with TestClient(app) as admin:
+        admin_csrf = sign_in(admin, ADMIN, ADMIN_PASSWORD)
+        url = f"/api/requests/{draft['id']}"
+        assert admin.post(f"{url}/approve", json={}, headers={"X-CSRF-Token": admin_csrf}).status_code == 409
+        assert admin.post(f"{url}/return", json={"reason": "   "}, headers={"X-CSRF-Token": admin_csrf}).status_code == 422
+        assert admin.post(f"{url}/return", json={"reason": "reason"}, headers={"X-CSRF-Token": admin_csrf}).status_code == 409
+
+
+def test_roles_and_ownership_are_enforced_for_review_and_resubmission() -> None:
+    with TestClient(app) as owner:
+        owner_csrf = sign_in(owner, APPLICANT_A, APPLICANT_A_PASSWORD)
+        created = create_request(owner, owner_csrf)
+        request_id = created["id"]
+        owner.post(f"/api/requests/{request_id}/submit", headers={"X-CSRF-Token": owner_csrf})
+
+    with TestClient(app) as applicant_b:
+        csrf_b = sign_in(applicant_b, APPLICANT_B, APPLICANT_B_PASSWORD)
+        assert applicant_b.post(f"/api/requests/{request_id}/approve", json={}, headers={"X-CSRF-Token": csrf_b}).status_code == 403
+        assert applicant_b.post(f"/api/requests/{request_id}/return", json={"reason": "No"}, headers={"X-CSRF-Token": csrf_b}).status_code == 403
+
+    with TestClient(app) as admin:
+        admin_csrf = sign_in(admin, ADMIN, ADMIN_PASSWORD)
+        admin.post(f"/api/requests/{request_id}/return", json={"reason": "Please revise."}, headers={"X-CSRF-Token": admin_csrf})
+        assert admin.post(f"/api/requests/{request_id}/resubmit", json={}, headers={"X-CSRF-Token": admin_csrf}).status_code == 403
+
+    with TestClient(app) as applicant_b:
+        csrf_b = sign_in(applicant_b, APPLICANT_B, APPLICANT_B_PASSWORD)
+        assert applicant_b.get(f"/api/requests/{request_id}").status_code == 404
+        assert applicant_b.put(f"/api/requests/{request_id}", json=request_payload(applicant_b), headers={"X-CSRF-Token": csrf_b}).status_code == 404
+        assert applicant_b.post(f"/api/requests/{request_id}/resubmit", json={}, headers={"X-CSRF-Token": csrf_b}).status_code == 404
+
+
+def test_concurrent_approvals_create_only_one_decision() -> None:
+    with TestClient(app) as applicant:
+        applicant_csrf = sign_in(applicant, APPLICANT_A, APPLICANT_A_PASSWORD)
+        request_id = create_request(applicant, applicant_csrf)["id"]
+        applicant.post(f"/api/requests/{request_id}/submit", headers={"X-CSRF-Token": applicant_csrf})
+
+    clients = [TestClient(app), TestClient(app)]
+    try:
+        csrf_tokens = [sign_in(client, ADMIN, ADMIN_PASSWORD) for client in clients]
+        def approve(index: int) -> int:
+            response = clients[index].post(f"/api/requests/{request_id}/approve", json={"comment": f"Review {index}"}, headers={"X-CSRF-Token": csrf_tokens[index]})
+            return response.status_code
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(approve, (0, 1)))
+        assert sorted(results) == [200, 409]
+        detail = clients[0].get(f"/api/requests/{request_id}").json()
+        assert detail["status"] == "Approved"
+        assert len([event for event in detail["events"] if event["event_type"] == "Approved"]) == 1
+    finally:
+        for client in clients:
+            client.close()

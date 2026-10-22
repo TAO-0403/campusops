@@ -193,6 +193,7 @@ function RequestFormPage({ user, navigate, onSignOut, requestId }: { user: User;
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [editingStatus, setEditingStatus] = useState<'Draft' | 'Returned'>('Draft')
   useEffect(() => {
     let active = true
     Promise.all([api.listDepartments(), requestId ? api.getRequest(requestId) : Promise.resolve(null)])
@@ -200,8 +201,8 @@ function RequestFormPage({ user, navigate, onSignOut, requestId }: { user: User;
         if (!active) return
         setDepartments(rows)
         if (existing) {
-          if (existing.requester_id !== user.id || existing.status !== 'Draft') setError('Only your own draft requests can be edited.')
-          else setDraft({ title: existing.title, description: existing.description ?? '', vendor: existing.vendor, department_id: existing.department_id, amount: existing.amount })
+          if (existing.requester_id !== user.id || !['Draft', 'Returned'].includes(existing.status)) setError('Only your own draft or returned requests can be edited.')
+          else { setEditingStatus(existing.status as 'Draft' | 'Returned'); setDraft({ title: existing.title, description: existing.description ?? '', vendor: existing.vendor, department_id: existing.department_id, amount: existing.amount }) }
         }
       })
       .catch((failure: unknown) => { if (active) setError(failure instanceof Error ? failure.message : 'Could not load the request form.') })
@@ -215,7 +216,7 @@ function RequestFormPage({ user, navigate, onSignOut, requestId }: { user: User;
     try {
       const payload = { ...draft, amount: draft.amount || '0.00' }
       const saved = savedId ? await api.updateRequest(savedId, payload) : await api.createRequest(payload)
-      setSavedId(saved.id); setSuccess('Draft saved successfully.')
+      setSavedId(saved.id); setSuccess(editingStatus === 'Returned' ? 'Returned request updated. Resubmit it when ready.' : 'Draft saved successfully.')
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not save the draft.') }
     finally { setSaving(false) }
   }
@@ -224,7 +225,7 @@ function RequestFormPage({ user, navigate, onSignOut, requestId }: { user: User;
     <main className="page-shell app-shell">
       <TopBar navigate={navigate} user={user} onSignOut={onSignOut} />
       <div className="breadcrumb"><button className="back-link" onClick={() => navigate('/workspace')}>← Back to requests</button></div>
-      <section className="page-heading form-page-heading"><div><p className="eyebrow"><span className="eyebrow-dot" /> {savedId ? 'DRAFT REQUEST' : 'NEW REQUEST'}</p><h1 className="page-title">{savedId ? 'Edit purchase request' : 'Start a purchase request'}</h1><p className="hero-copy">Save a draft at any point. Required details are checked when you submit.</p></div></section>
+      <section className="page-heading form-page-heading"><div><p className="eyebrow"><span className="eyebrow-dot" /> {savedId ? `${editingStatus.toUpperCase()} REQUEST` : 'NEW REQUEST'}</p><h1 className="page-title">{savedId ? 'Edit purchase request' : 'Start a purchase request'}</h1><p className="hero-copy">{editingStatus === 'Returned' ? 'Save your changes, then resubmit the request for review.' : 'Save a draft at any point. Required details are checked when you submit.'}</p></div></section>
       {loading ? <div className="table-card state-block">Loading request details…</div> : <form className="form-card request-form" onSubmit={saveDraft}>
         <div className="form-section-heading"><h2>Request details</h2><span className="required-note">Required before submission</span></div>
         {error && <p className="notice notice-error" role="alert">{error}</p>}{success && <p className="notice notice-success" role="status">{success} {savedId && <button type="button" className="inline-link" onClick={() => navigate(`/requests/${savedId}`)}>View request</button>}</p>}
@@ -235,7 +236,7 @@ function RequestFormPage({ user, navigate, onSignOut, requestId }: { user: User;
           <div className="form-field"><label className="field-label" htmlFor="amount">Estimated amount (USD)</label><div className="amount-input-wrap"><span aria-hidden="true">$</span><input id="amount" className="text-input" type="number" min="0" step="0.01" value={draft.amount} onChange={(event) => setField('amount', event.target.value)} /></div></div>
           <div className="form-field form-field-wide"><label className="field-label" htmlFor="description">Purpose and description</label><textarea id="description" className="text-input text-area" maxLength={5000} rows={5} value={draft.description} onChange={(event) => setField('description', event.target.value)} placeholder="Describe what you need and how it will support campus work." /></div>
         </div>
-        <div className="form-actions"><button className="button button-secondary" type="button" onClick={() => navigate('/workspace')}>Cancel</button><button className="button button-primary" type="submit" disabled={saving || Boolean(error && requestId)}>{saving ? 'Saving…' : 'Save draft'}</button></div>
+        <div className="form-actions"><button className="button button-secondary" type="button" onClick={() => navigate('/workspace')}>Cancel</button><button className="button button-primary" type="submit" disabled={saving || Boolean(error && requestId)}>{saving ? 'Saving…' : editingStatus === 'Returned' ? 'Save changes' : 'Save draft'}</button></div>
       </form>}
       <footer className="footer"><span>CampusOps</span><span>Drafts remain private to their applicant.</span></footer>
     </main>
@@ -245,9 +246,12 @@ function RequestFormPage({ user, navigate, onSignOut, requestId }: { user: User;
 function RequestDetailPage({ user, requestId, navigate, onSignOut }: { user: User; requestId: number; navigate: Navigate; onSignOut: () => void }) {
   const [request, setRequest] = useState<RequestDetail | null>(null)
   const [loading, setLoading] = useState(true)
-  const [submitting, setSubmitting] = useState(false)
+  const [processing, setProcessing] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [approvalComment, setApprovalComment] = useState('')
+  const [returnReason, setReturnReason] = useState('')
+  const [resubmitComment, setResubmitComment] = useState('')
   const loadRequest = useCallback(async () => {
     setLoading(true); setError('')
     try { setRequest(await api.getRequest(requestId)) }
@@ -255,25 +259,36 @@ function RequestDetailPage({ user, requestId, navigate, onSignOut }: { user: Use
     finally { setLoading(false) }
   }, [requestId])
   useEffect(() => { void loadRequest() }, [loadRequest])
-  const submit = async () => {
-    if (!window.confirm('Submit this purchase request for review? You will not be able to edit it afterwards.')) return
-    setSubmitting(true); setError(''); setSuccess('')
-    try { await api.submitRequest(requestId); setRequest(await api.getRequest(requestId)); setSuccess('Purchase request submitted successfully.') }
-    catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not submit this request.') }
-    finally { setSubmitting(false) }
+  const perform = async (action: () => Promise<unknown>, message: string) => {
+    setProcessing(true); setError(''); setSuccess('')
+    try { await action(); setRequest(await api.getRequest(requestId)); setSuccess(message) }
+    catch (failure) { setError(failure instanceof Error ? failure.message : 'The request could not be completed. Please try again.') }
+    finally { setProcessing(false) }
   }
-  const canEdit = Boolean(request && user.role === 'requester' && request.requester_id === user.id && request.status === 'Draft')
+  const isOwner = Boolean(request && user.role === 'requester' && request.requester_id === user.id)
+  const canEdit = Boolean(isOwner && (request?.status === 'Draft' || request?.status === 'Returned'))
+  const canReview = Boolean(user.role === 'admin' && request?.status === 'Submitted')
+  const submit = () => {
+    if (!window.confirm('Submit this purchase request for review? You will not be able to edit it afterwards.')) return
+    void perform(() => api.submitRequest(requestId), 'Purchase request submitted successfully.')
+  }
+  const resubmit = () => {
+    if (!window.confirm('Resubmit this purchase request for review? You will not be able to edit it afterwards.')) return
+    void perform(() => api.resubmitRequest(requestId, resubmitComment), 'Purchase request resubmitted successfully.')
+  }
 
   return (
     <main className="page-shell app-shell">
       <TopBar navigate={navigate} user={user} onSignOut={onSignOut} />
       <div className="breadcrumb"><button className="back-link" onClick={() => navigate('/workspace')}>← Back to requests</button></div>
       {loading ? <div className="table-card state-block">Loading request details…</div> : error && !request ? <section className="table-card state-block"><p className="notice notice-error">{error}</p><button className="button button-secondary" onClick={() => navigate('/workspace')}>Return to requests</button></section> : request ? <>
-        <section className="detail-heading"><div className="detail-title-group"><p className="eyebrow"><span className="eyebrow-dot" /> PURCHASE REQUEST #{request.id}</p><h1 className="page-title">{request.title || 'Untitled draft'}</h1><div className="detail-status"><StatusBadge status={request.status} /><span>Updated {formatDate(request.updated_at)}</span></div></div>{canEdit && <div className="detail-actions"><button className="button button-secondary" onClick={() => navigate(`/requests/${request.id}/edit`)}>Edit draft</button><button className="button button-primary" onClick={submit} disabled={submitting}>{submitting ? 'Submitting…' : 'Submit for review'}</button></div>}</section>
+        <section className="detail-heading"><div className="detail-title-group"><p className="eyebrow"><span className="eyebrow-dot" /> PURCHASE REQUEST #{request.id}</p><h1 className="page-title">{request.title || 'Untitled draft'}</h1><div className="detail-status"><StatusBadge status={request.status} /><span>Updated {formatDate(request.updated_at)}</span></div></div>{canEdit && <div className="detail-actions"><button className="button button-secondary" onClick={() => navigate(`/requests/${request.id}/edit`)}>{request.status === 'Returned' ? 'Edit returned request' : 'Edit draft'}</button>{request.status === 'Draft' ? <button className="button button-primary" onClick={submit} disabled={processing}>{processing ? 'Submitting…' : 'Submit for review'}</button> : null}</div>}</section>
         {error && <p className="notice notice-error page-notice" role="alert">{error}</p>}{success && <p className="notice notice-success page-notice" role="status">{success}</p>}
+        {request.status === 'Returned' && isOwner && <section className="review-panel"><div><p className="section-kicker">NEXT STEP</p><h2>Update and resubmit</h2><p className="muted-copy">Save edits first. The request stays returned until you resubmit it.</p></div><label className="review-field"><span>Resubmission note (optional)</span><textarea className="text-input text-area" rows={3} maxLength={2000} value={resubmitComment} onChange={(event) => setResubmitComment(event.target.value)} /></label><button className="button button-primary" onClick={resubmit} disabled={processing}>{processing ? 'Resubmitting…' : 'Resubmit for review'}</button></section>}
+        {canReview && <section className="review-panel"><div><p className="section-kicker">ADMIN REVIEW</p><h2>Review this request</h2><p className="muted-copy">Choose a decision. A return reason is required.</p></div><div className="review-fields"><label className="review-field"><span>Approval comment (optional)</span><textarea className="text-input text-area" rows={3} maxLength={2000} value={approvalComment} onChange={(event) => setApprovalComment(event.target.value)} /></label><label className="review-field"><span>Return reason (required)</span><textarea className="text-input text-area" rows={3} maxLength={2000} value={returnReason} onChange={(event) => setReturnReason(event.target.value)} /></label></div><div className="review-actions"><button className="button button-secondary" onClick={() => void perform(() => api.returnRequest(requestId, returnReason), 'Request returned to the applicant.')} disabled={processing || !returnReason.trim()}>{processing ? 'Processing…' : 'Return for changes'}</button><button className="button button-primary" onClick={() => void perform(() => api.approveRequest(requestId, approvalComment), 'Purchase request approved.')} disabled={processing}>{processing ? 'Processing…' : 'Approve'}</button></div></section>}
         <div className="detail-grid">
           <section className="table-card detail-card" aria-labelledby="detail-information-title"><div className="table-heading"><div><p className="section-kicker">REQUEST INFORMATION</p><h2 id="detail-information-title">Purchase details</h2></div></div><dl className="detail-list"><div><dt>Vendor</dt><dd>{request.vendor || 'Not set'}</dd></div><div><dt>Department</dt><dd>{request.department_name ?? 'Not set'}</dd></div><div><dt>Estimated amount</dt><dd className="amount-cell">{formatMoney(request.amount)}</dd></div><div><dt>Applicant</dt><dd>{request.requester_name}</dd></div><div><dt>Created</dt><dd>{formatDate(request.created_at)}</dd></div><div className="detail-description"><dt>Purpose and description</dt><dd>{request.description || 'No description provided.'}</dd></div></dl></section>
-          <section className="table-card history-card" aria-labelledby="history-title"><div className="table-heading"><div><p className="section-kicker">AUDIT TRAIL</p><h2 id="history-title">Activity history</h2></div></div>{request.events.length === 0 ? <p className="muted-copy">No activity recorded yet.</p> : <ol className="timeline">{request.events.map((event) => <li className="timeline-item" key={event.id}><span className={`timeline-dot ${event.event_type === 'Submitted' ? 'timeline-dot-active' : ''}`} aria-hidden="true" /><div><strong>{event.event_type === 'Submitted' ? 'Request submitted' : event.event_type === 'Created' ? 'Draft created' : 'Draft updated'}</strong><p>{event.actor_name} · {formatDate(event.created_at)}</p></div></li>)}</ol>}</section>
+          <section className="table-card history-card" aria-labelledby="history-title"><div className="table-heading"><div><p className="section-kicker">AUDIT TRAIL</p><h2 id="history-title">Activity history</h2></div></div>{request.events.length === 0 ? <p className="muted-copy">No activity recorded yet.</p> : <ol className="timeline">{request.events.map((event) => <li className="timeline-item" key={event.id}><span className={`timeline-dot ${['Submitted', 'Resubmitted', 'Approved'].includes(event.event_type) ? 'timeline-dot-active' : ''}`} aria-hidden="true" /><div><strong>{event.event_type === 'Submitted' ? 'Request submitted' : event.event_type === 'Resubmitted' ? 'Request resubmitted' : event.event_type === 'Approved' ? 'Request approved' : event.event_type === 'Returned' ? 'Request returned' : event.event_type === 'Created' ? 'Draft created' : 'Request updated'}</strong><p>{event.actor_name} · {formatDate(event.created_at)} · {event.previous_status ?? 'New'} → {event.new_status}</p>{event.comment && <p className="event-comment">{event.comment}</p>}</div></li>)}</ol>}</section>
         </div>
       </> : null}
       <footer className="footer"><span>CampusOps</span><span>Request history is saved with each status change.</span></footer>

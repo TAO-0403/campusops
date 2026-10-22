@@ -31,10 +31,11 @@ export type PurchaseRequest = {
 
 export type RequestEvent = {
   id: number
-  event_type: 'Created' | 'Updated' | 'Submitted'
+  event_type: 'Created' | 'Updated' | 'Submitted' | 'Returned' | 'Resubmitted' | 'Approved'
   previous_status: RequestStatus | null
   new_status: RequestStatus
   details: Record<string, unknown>
+  comment: string | null
   created_at: string
   actor_name: string
 }

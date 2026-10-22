@@ -166,6 +166,14 @@ h1 { margin-bottom: 18px; color: #1e3447; font-size: clamp(38px, 5.2vw, 58px); f
 .timeline-dot-active { border-color: #4a947b; background: #4a947b; }
 .timeline-item strong { color: #415665; font-size: 11px; }
 .timeline-item p, .muted-copy { margin: 5px 0 0; color: #94a0a6; font-size: 10px; }
+.review-panel { display: grid; gap: 17px; margin: 0 0 18px; padding: 24px 26px; border: 1px solid #e3e9ed; border-radius: 14px; background: #fff; box-shadow: 0 8px 28px #243b4b08; }
+.review-panel h2 { margin: 0; color: #2d4353; font-size: 16px; }
+.review-panel .muted-copy { margin-top: 7px; font-size: 11px; line-height: 1.6; }
+.review-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.review-field { display: grid; gap: 7px; color: #465b6b; font-size: 11px; font-weight: 700; }
+.review-field .text-area { min-height: 80px; }
+.review-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.event-comment { max-width: 420px; padding: 8px 10px; border-left: 2px solid #d7e4e2; background: #f8faf9; color: #657681 !important; line-height: 1.6; white-space: pre-wrap; }
 .loading-screen { display: flex; min-height: 100vh; align-items: center; justify-content: center; flex-direction: column; gap: 14px; color: #778690; font-size: 12px; }
 .loading-screen p { margin: 0; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
@@ -205,6 +213,9 @@ h1 { margin-bottom: 18px; color: #1e3447; font-size: clamp(38px, 5.2vw, 58px); f
   .form-section-heading { align-items: flex-start; flex-direction: column; }
   .detail-actions { width: 100%; }
   .detail-actions .button { flex: 1; }
+  .review-fields { grid-template-columns: 1fr; }
+  .review-actions { flex-direction: column-reverse; }
+  .review-actions .button { width: 100%; }
   .detail-list { grid-template-columns: 1fr; padding-right: 20px; padding-left: 20px; }
   .detail-list .detail-description { grid-column: auto; }
 }

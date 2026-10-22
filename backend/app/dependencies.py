@@ -59,3 +59,9 @@ def require_requester_with_csrf(context: AuthContext = Depends(require_csrf)) ->
     if context.user["role"] != "requester":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only requesters can change purchase requests.")
     return context
+
+
+def require_admin_with_csrf(context: AuthContext = Depends(require_csrf)) -> AuthContext:
+    if context.user["role"] != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only administrators can review purchase requests.")
+    return context

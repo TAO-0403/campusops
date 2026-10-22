@@ -62,6 +62,12 @@ Run `python -m app.seed_demo` from the `backend` directory to create or refresh 
 
 These credentials are for local demonstration only. Passwords are stored as Argon2 hashes.
 
+## Request review workflow
+
+Applicants can save and edit a draft, then submit it for review. Submitted requests are locked while an administrator reviews them. An administrator can approve a request with an optional comment or return it with a required reason. The applicant can edit a returned request; edits keep it in Returned until the applicant explicitly resubmits it. Every submission, resubmission, return, and approval is recorded with its actor, timestamp, status transition, and comment when provided.
+
+To try the full workflow, sign in as Alex, create and submit a request, then sign out. Sign in as Casey and open the submitted request to approve it or return it with a reason. To complete the return path, sign back in as Alex, edit the returned request, save the changes, and use **Resubmit for review**. Sign in as Casey again to approve the resubmitted request. Activity history appears on the request detail page.
+
 ## Verification
 
 Create an empty PostgreSQL database named `campusops_test` owned by `campusops_app` using a local PostgreSQL administrator. The test suite refuses to run when its configured database matches the development database and only clears request, user, and session data inside the `_test` database. It never clears the development database.
@@ -80,4 +86,4 @@ npm run build
 
 ## Current scope
 
-Authentication, request drafts, request submission, and activity history are included. Approval, return, analytics, and deployment are not included in this stage.
+Authentication, request drafts, submission, administrator approval and return, returned-request editing and resubmission, and activity history are included. Analytics, attachments, notifications, and deployment are not included.

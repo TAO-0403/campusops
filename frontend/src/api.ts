@@ -60,4 +60,7 @@ export const api = {
   createRequest: (draft: RequestDraft) => apiRequest<PurchaseRequest>('/requests', { method: 'POST', body: JSON.stringify(draft) }),
   updateRequest: (id: number, draft: RequestDraft) => apiRequest<PurchaseRequest>(`/requests/${id}`, { method: 'PUT', body: JSON.stringify(draft) }),
   submitRequest: (id: number) => apiRequest<PurchaseRequest>(`/requests/${id}/submit`, { method: 'POST' }),
+  resubmitRequest: (id: number, comment: string) => apiRequest<PurchaseRequest>(`/requests/${id}/resubmit`, { method: 'POST', body: JSON.stringify({ comment }) }),
+  approveRequest: (id: number, comment: string) => apiRequest<PurchaseRequest>(`/requests/${id}/approve`, { method: 'POST', body: JSON.stringify({ comment }) }),
+  returnRequest: (id: number, reason: string) => apiRequest<PurchaseRequest>(`/requests/${id}/return`, { method: 'POST', body: JSON.stringify({ reason }) }),
 }
