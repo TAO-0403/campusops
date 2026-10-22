@@ -1,6 +1,7 @@
 from decimal import Decimal
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from psycopg import Connection
 
 from app.db import connect
@@ -13,6 +14,8 @@ from app.dependencies import (
 from app.schemas import ApprovalInput, RequestInput, ResubmitInput, ReturnInput
 
 router = APIRouter(tags=["purchase requests"])
+REQUEST_STATUSES = ("Draft", "Submitted", "Returned", "Approved")
+SORT_COLUMNS = {"created_at": "r.created_at", "amount": "r.amount"}
 
 
 def _serialize_request(row: dict) -> dict:
@@ -116,35 +119,111 @@ def list_departments(_: AuthContext = Depends(get_auth_context)) -> list[dict]:
 
 
 @router.get("/requests")
-def list_requests(context: AuthContext = Depends(get_auth_context)) -> list[dict]:
+def list_requests(
+    search: str | None = Query(default=None, max_length=120),
+    request_status: Literal["Draft", "Submitted", "Returned", "Approved"] | None = Query(default=None, alias="status"),
+    department_id: int | None = Query(default=None, gt=0),
+    sort_by: Literal["created_at", "amount"] = "created_at",
+    sort_order: Literal["asc", "desc"] = "desc",
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=10, le=20, multiple_of=10),
+    context: AuthContext = Depends(get_auth_context),
+) -> dict:
+    clauses, parameters = _request_filters(context, search, request_status, department_id)
+    where_sql = " AND ".join(clauses)
+    order_column = SORT_COLUMNS[sort_by]
+    direction = "ASC" if sort_order == "asc" else "DESC"
+    offset = (page - 1) * page_size
     with connect() as connection:
-        if context.user["role"] == "admin":
-            rows = connection.execute(
-                """
-                SELECT r.id, r.title, r.vendor, r.department_id, d.name AS department_name,
-                       r.amount, r.currency, r.status, r.requester_id,
-                       u.full_name AS requester_name, r.created_at, r.updated_at
-                FROM purchase_requests AS r
-                LEFT JOIN departments AS d ON d.id = r.department_id
-                JOIN users AS u ON u.id = r.requester_id
-                ORDER BY r.updated_at DESC, r.id DESC
-                """
-            ).fetchall()
-        else:
-            rows = connection.execute(
-                """
-                SELECT r.id, r.title, r.vendor, r.department_id, d.name AS department_name,
-                       r.amount, r.currency, r.status, r.requester_id,
-                       u.full_name AS requester_name, r.created_at, r.updated_at
-                FROM purchase_requests AS r
-                LEFT JOIN departments AS d ON d.id = r.department_id
-                JOIN users AS u ON u.id = r.requester_id
-                WHERE r.requester_id = %s
-                ORDER BY r.updated_at DESC, r.id DESC
-                """,
-                (context.user["id"],),
-            ).fetchall()
-    return [_serialize_request(row) for row in rows]
+        total = connection.execute(
+            f"SELECT count(*) AS total FROM purchase_requests AS r WHERE {where_sql}", parameters
+        ).fetchone()["total"]
+        rows = connection.execute(
+            f"""
+            SELECT r.id, r.title, r.vendor, r.department_id, d.name AS department_name,
+                   r.amount, r.currency, r.status, r.requester_id,
+                   u.full_name AS requester_name, r.created_at, r.updated_at
+            FROM purchase_requests AS r
+            LEFT JOIN departments AS d ON d.id = r.department_id
+            JOIN users AS u ON u.id = r.requester_id
+            WHERE {where_sql}
+            ORDER BY {order_column} {direction}, r.id {direction}
+            LIMIT %s OFFSET %s
+            """,
+            (*parameters, page_size, offset),
+        ).fetchall()
+    return {"items": [_serialize_request(row) for row in rows], "total": total, "page": page, "page_size": page_size}
+
+
+def _request_filters(
+    context: AuthContext,
+    search: str | None,
+    request_status: str | None,
+    department_id: int | None,
+) -> tuple[list[str], list[object]]:
+    clauses: list[str] = []
+    parameters: list[object] = []
+    if context.user["role"] != "admin":
+        clauses.append("r.requester_id = %s")
+        parameters.append(context.user["id"])
+    if search and search.strip():
+        clauses.append("r.title ILIKE %s")
+        parameters.append(f"%{search.strip()}%")
+    if request_status:
+        clauses.append("r.status = %s")
+        parameters.append(request_status)
+    if department_id is not None:
+        clauses.append("r.department_id = %s")
+        parameters.append(department_id)
+    return clauses or ["TRUE"], parameters
+
+
+@router.get("/requests/overview")
+def request_overview(
+    search: str | None = Query(default=None, max_length=120),
+    request_status: Literal["Draft", "Submitted", "Returned", "Approved"] | None = Query(default=None, alias="status"),
+    department_id: int | None = Query(default=None, gt=0),
+    context: AuthContext = Depends(get_auth_context),
+) -> dict:
+    clauses, parameters = _request_filters(context, search, request_status, department_id)
+    where_sql = " AND ".join(clauses)
+    with connect() as connection:
+        status_rows = connection.execute(
+            f"SELECT r.status, count(*) AS count FROM purchase_requests AS r WHERE {where_sql} GROUP BY r.status",
+            parameters,
+        ).fetchall()
+        department_rows = connection.execute(
+            f"""
+            SELECT r.department_id, d.name AS department_name, count(*) AS count
+            FROM purchase_requests AS r
+            LEFT JOIN departments AS d ON d.id = r.department_id
+            WHERE {where_sql}
+            GROUP BY r.department_id, d.name
+            ORDER BY d.name NULLS LAST, r.department_id
+            """,
+            parameters,
+        ).fetchall()
+        amount_row = connection.execute(
+            f"""
+            SELECT count(*) AS total_requests,
+                   count(*) FILTER (WHERE r.status = 'Submitted') AS pending_review,
+                   count(*) FILTER (WHERE r.status = 'Returned') AS changes_requested,
+                   COALESCE(sum(r.amount) FILTER (WHERE r.status = 'Approved'), 0)::numeric(14, 2) AS approved_amount
+            FROM purchase_requests AS r
+            WHERE {where_sql}
+            """,
+            parameters,
+        ).fetchone()
+
+    counts = {row["status"]: row["count"] for row in status_rows}
+    return {
+        "total_requests": amount_row["total_requests"],
+        "pending_review": amount_row["pending_review"],
+        "changes_requested": amount_row["changes_requested"],
+        "approved_amount": format(amount_row["approved_amount"], ".2f"),
+        "requests_by_status": [{"status": value, "count": counts.get(value, 0)} for value in REQUEST_STATUSES],
+        "requests_by_department": department_rows,
+    }
 
 
 @router.post("/requests", status_code=status.HTTP_201_CREATED)

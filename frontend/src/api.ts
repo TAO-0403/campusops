@@ -1,4 +1,4 @@
-import type { AuthResponse, Department, PurchaseRequest, RequestDetail, RequestDraft } from './types'
+import type { AuthResponse, Department, PurchaseRequest, RequestDetail, RequestDraft, RequestFilters, RequestOverview, RequestPage } from './types'
 
 const API_ROOT = 'http://127.0.0.1:8000/api'
 let csrfToken = ''
@@ -55,7 +55,24 @@ export const api = {
     try { await apiRequest<void>('/auth/logout', { method: 'POST' }) } finally { csrfToken = '' }
   },
   listDepartments: () => apiRequest<Department[]>('/departments'),
-  listRequests: () => apiRequest<PurchaseRequest[]>('/requests'),
+  searchRequests(filters: RequestFilters) {
+    const params = new URLSearchParams()
+    if (filters.search.trim()) params.set('search', filters.search.trim())
+    if (filters.status) params.set('status', filters.status)
+    if (filters.department_id !== '') params.set('department_id', String(filters.department_id))
+    params.set('sort_by', filters.sort_by)
+    params.set('sort_order', filters.sort_order)
+    params.set('page', String(filters.page))
+    params.set('page_size', String(filters.page_size))
+    return apiRequest<RequestPage>(`/requests?${params.toString()}`)
+  },
+  requestOverview(filters: Pick<RequestFilters, 'search' | 'status' | 'department_id'>) {
+    const params = new URLSearchParams()
+    if (filters.search.trim()) params.set('search', filters.search.trim())
+    if (filters.status) params.set('status', filters.status)
+    if (filters.department_id !== '') params.set('department_id', String(filters.department_id))
+    return apiRequest<RequestOverview>(`/requests/overview?${params.toString()}`)
+  },
   getRequest: (id: number) => apiRequest<RequestDetail>(`/requests/${id}`),
   createRequest: (draft: RequestDraft) => apiRequest<PurchaseRequest>('/requests', { method: 'POST', body: JSON.stringify(draft) }),
   updateRequest: (id: number, draft: RequestDraft) => apiRequest<PurchaseRequest>(`/requests/${id}`, { method: 'PUT', body: JSON.stringify(draft) }),

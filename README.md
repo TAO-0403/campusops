@@ -68,6 +68,10 @@ Applicants can save and edit a draft, then submit it for review. Submitted reque
 
 To try the full workflow, sign in as Alex, create and submit a request, then sign out. Sign in as Casey and open the submitted request to approve it or return it with a reason. To complete the return path, sign back in as Alex, edit the returned request, save the changes, and use **Resubmit for review**. Sign in as Casey again to approve the resubmitted request. Activity history appears on the request detail page.
 
+## Search and overview
+
+The workspace supports title search, status and department filters, creation-time or amount sorting, and 10- or 20-row pages. Search, filters, and sorting run on the server, and the result total is shown above the table. Overview cards and charts use the same search and filters across all matching requests, independent of the selected page and sort order. **Approved amount** sums only requests in Approved status and is shown in USD; it does not represent paid or spent funds. The homepage service health check is inside the collapsed **Development information** section.
+
 ## Verification
 
 Create an empty PostgreSQL database named `campusops_test` owned by `campusops_app` using a local PostgreSQL administrator. The test suite refuses to run when its configured database matches the development database and only clears request, user, and session data inside the `_test` database. It never clears the development database.
@@ -86,4 +90,4 @@ npm run build
 
 ## Current scope
 
-Authentication, request drafts, submission, administrator approval and return, returned-request editing and resubmission, and activity history are included. Analytics, attachments, notifications, and deployment are not included.
+Authentication, request drafts, submission, administrator approval and return, returned-request editing and resubmission, activity history, server-side request search and filtering, pagination, sorting, and aggregate request overview charts are included. Attachments, email notifications, and deployment are not included.

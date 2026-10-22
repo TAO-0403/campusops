@@ -76,7 +76,7 @@ def test_requester_cannot_read_or_edit_another_users_request() -> None:
 
     with TestClient(app) as client_b:
         csrf_b = sign_in(client_b, APPLICANT_B, APPLICANT_B_PASSWORD)
-        assert client_b.get("/api/requests").json() == []
+        assert client_b.get("/api/requests").json()["items"] == []
         assert client_b.get(f"/api/requests/{created['id']}").status_code == 404
         update = client_b.put(
             f"/api/requests/{created['id']}",
@@ -93,7 +93,7 @@ def test_admin_is_read_only_and_cannot_be_granted_requester_actions() -> None:
 
     with TestClient(app) as admin_client:
         admin_csrf = sign_in(admin_client, ADMIN, ADMIN_PASSWORD)
-        assert len(admin_client.get("/api/requests").json()) == 1
+        assert admin_client.get("/api/requests").json()["total"] == 1
         assert admin_client.post(
             "/api/requests",
             json=request_payload(admin_client),
@@ -301,3 +301,94 @@ def test_concurrent_approvals_create_only_one_decision() -> None:
     finally:
         for client in clients:
             client.close()
+
+
+def test_request_search_combined_filters_sorting_and_pagination() -> None:
+    with TestClient(app) as client:
+        csrf = sign_in(client, APPLICANT_A, APPLICANT_A_PASSWORD)
+        departments = client.get("/api/departments").json()
+        science = next(row["id"] for row in departments if row["code"] == "SCI")
+        library = next(row["id"] for row in departments if row["code"] == "LIB")
+        science_rows = []
+        for index in range(22):
+            department_id = science if index % 2 == 0 else library
+            created = create_request(
+                client,
+                csrf,
+                title=f"RequestBatch laboratory item {index:02d}",
+                department_id=department_id,
+                amount="100.00" if index % 4 else "250.00",
+            )
+            if department_id == science:
+                science_rows.append((created["id"], float(created["amount"])))
+            assert client.post(f"/api/requests/{created['id']}/submit", headers={"X-CSRF-Token": csrf}).status_code == 200
+
+        params = {"search": "requestbatch", "status": "Submitted", "department_id": science, "sort_by": "amount", "sort_order": "desc", "page_size": 10}
+        first_page = client.get("/api/requests", params={**params, "page": 1})
+        second_page = client.get("/api/requests", params={**params, "page": 2})
+        assert first_page.status_code == 200, first_page.text
+        assert first_page.json()["total"] == 11
+        assert first_page.json()["page"] == 1
+        assert first_page.json()["page_size"] == 10
+        assert len(first_page.json()["items"]) == 10
+        assert len(second_page.json()["items"]) == 1
+        combined_ids = [row["id"] for row in first_page.json()["items"] + second_page.json()["items"]]
+        expected_ids = [request_id for request_id, _ in sorted(science_rows, key=lambda row: (row[1], row[0]), reverse=True)]
+        assert combined_ids == expected_ids
+        amounts = [float(row["amount"]) for row in first_page.json()["items"]]
+        assert amounts == sorted(amounts, reverse=True)
+        overview = client.get("/api/requests/overview", params={key: value for key, value in params.items() if key not in ("sort_by", "sort_order", "page_size")}).json()
+        assert overview["total_requests"] == 11
+        assert overview["pending_review"] == 11
+        assert overview["approved_amount"] == "0.00"
+        assert overview["requests_by_department"] == [{"department_id": science, "department_name": "Science", "count": 11}]
+        assert client.get("/api/requests", params={**params, "page_size": 15}).status_code == 422
+        assert client.get("/api/requests", params={**params, "sort_by": "amount;DROP TABLE users"}).status_code == 422
+
+
+def test_request_overview_aggregates_all_matching_records_and_respects_user_scope() -> None:
+    with TestClient(app) as alex:
+        alex_csrf = sign_in(alex, APPLICANT_A, APPLICANT_A_PASSWORD)
+        departments = alex.get("/api/departments").json()
+        science = next(row["id"] for row in departments if row["code"] == "SCI")
+        library = next(row["id"] for row in departments if row["code"] == "LIB")
+        create_request(alex, alex_csrf, title="Metrics draft", department_id=science, amount="50.00")
+        submitted = create_request(alex, alex_csrf, title="Metrics pending", department_id=library, amount="80.00")
+        returned = create_request(alex, alex_csrf, title="Metrics returned", department_id=science, amount="120.00")
+        approved = create_request(alex, alex_csrf, title="Metrics approved", department_id=library, amount="200.00")
+        for request in (submitted, returned, approved):
+            assert alex.post(f"/api/requests/{request['id']}/submit", headers={"X-CSRF-Token": alex_csrf}).status_code == 200
+
+    with TestClient(app) as casey:
+        casey_csrf = sign_in(casey, ADMIN, ADMIN_PASSWORD)
+        assert casey.post(f"/api/requests/{returned['id']}/return", json={"reason": "Please revise."}, headers={"X-CSRF-Token": casey_csrf}).status_code == 200
+        assert casey.post(f"/api/requests/{approved['id']}/approve", json={}, headers={"X-CSRF-Token": casey_csrf}).status_code == 200
+
+    with TestClient(app) as jordan:
+        jordan_csrf = sign_in(jordan, APPLICANT_B, APPLICANT_B_PASSWORD)
+        jordan_request = create_request(jordan, jordan_csrf, title="Private Jordan request", amount="999.99")
+        assert jordan.post(f"/api/requests/{jordan_request['id']}/submit", headers={"X-CSRF-Token": jordan_csrf}).status_code == 200
+        jordan_overview = jordan.get("/api/requests/overview").json()
+        assert jordan_overview["total_requests"] == 1
+        assert jordan_overview["pending_review"] == 1
+        assert jordan_overview["approved_amount"] == "0.00"
+
+    with TestClient(app) as alex:
+        sign_in(alex, APPLICANT_A, APPLICANT_A_PASSWORD)
+        listing = alex.get("/api/requests", params={"page": 1, "page_size": 10}).json()
+        overview_page_one = alex.get("/api/requests/overview").json()
+        overview_page_two = alex.get("/api/requests/overview", params={"page": 2, "page_size": 10, "sort_by": "amount", "sort_order": "asc"}).json()
+
+    assert listing["total"] == 4
+    assert all(row["requester_name"] == "Alex Morgan" for row in listing["items"])
+    assert overview_page_one == overview_page_two
+    assert overview_page_one["total_requests"] == 4
+    assert overview_page_one["pending_review"] == 1
+    assert overview_page_one["changes_requested"] == 1
+    assert overview_page_one["approved_amount"] == "200.00"
+    assert {row["status"]: row["count"] for row in overview_page_one["requests_by_status"]} == {
+        "Draft": 1, "Submitted": 1, "Returned": 1, "Approved": 1,
+    }
+    assert {row["department_name"]: row["count"] for row in overview_page_one["requests_by_department"]} == {
+        "Science": 2, "Library": 2,
+    }

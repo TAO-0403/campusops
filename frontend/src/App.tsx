@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ApiError, api } from './api'
-import type { Department, PurchaseRequest, RequestDetail, RequestDraft, RequestStatus, User } from './types'
+import type { Department, PurchaseRequest, RequestDetail, RequestDraft, RequestFilters, RequestOverview, RequestStatus, User } from './types'
 
 type Navigate = (path: string) => void
 
@@ -62,11 +62,11 @@ function App() {
 
   const editMatch = path.match(/^\/requests\/(\d+)\/edit$/)
   const detailMatch = path.match(/^\/requests\/(\d+)$/)
-  if (path === '/' || path === '/workspace') return <WorkspacePage user={user} navigate={navigate} onSignOut={signOut} notice={authError} />
+  if (path === '/' || path === '/workspace') return <DashboardPage user={user} navigate={navigate} onSignOut={signOut} notice={authError} />
   if (path === '/requests/new' && user.role === 'requester') return <RequestFormPage user={user} navigate={navigate} onSignOut={signOut} />
   if (editMatch && user.role === 'requester') return <RequestFormPage user={user} requestId={Number(editMatch[1])} navigate={navigate} onSignOut={signOut} />
   if (detailMatch) return <RequestDetailPage user={user} requestId={Number(detailMatch[1])} navigate={navigate} onSignOut={signOut} />
-  return <WorkspacePage user={user} navigate={navigate} onSignOut={signOut} notice={authError} />
+  return <DashboardPage user={user} navigate={navigate} onSignOut={signOut} notice={authError} />
 }
 
 function Brand({ navigate }: { navigate: Navigate }) {
@@ -111,10 +111,13 @@ function LandingPage({ navigate, authError }: { navigate: Navigate; authError: s
         </div>
       </section>
       {authError && <p className="notice notice-error page-notice">{authError}</p>}
-      <section className="status-card" aria-labelledby="status-title" aria-live="polite">
-        <div className="status-copy"><p className="section-kicker">DEVELOPMENT STATUS</p><h2 id="status-title">Local services</h2></div>
-        <div className="status-list"><StatusItem label="API service" connected={health.backend} /><StatusItem label="PostgreSQL" connected={health.database} message={health.message} /></div>
-      </section>
+      <details className="development-details">
+        <summary><span><strong>Development information</strong><small>Local API and database health</small></span><span className="development-summary-state">{health.backend && health.database ? 'Services connected' : 'Check service status'}</span></summary>
+        <section className="status-card" aria-labelledby="status-title" aria-live="polite">
+          <div className="status-copy"><p className="section-kicker">DEVELOPMENT STATUS</p><h2 id="status-title">Local services</h2></div>
+          <div className="status-list"><StatusItem label="API service" connected={health.backend} /><StatusItem label="PostgreSQL" connected={health.database} message={health.message} /></div>
+        </section>
+      </details>
       <footer className="footer"><span>CampusOps</span><span>Built for better campus purchasing.</span></footer>
     </main>
   )
@@ -155,33 +158,93 @@ function SignInPage({ onSignedIn, navigate }: { onSignedIn: (user: User) => void
   )
 }
 
-function WorkspacePage({ user, navigate, onSignOut, notice }: { user: User; navigate: Navigate; onSignOut: () => void; notice: string }) {
+function DashboardPage({ user, navigate, onSignOut, notice }: { user: User; navigate: Navigate; onSignOut: () => void; notice: string }) {
   const [requests, setRequests] = useState<PurchaseRequest[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const [overview, setOverview] = useState<RequestOverview | null>(null)
+  const [departments, setDepartments] = useState<Department[]>([])
+  const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<RequestStatus | ''>('')
+  const [departmentFilter, setDepartmentFilter] = useState<number | ''>('')
+  const [sortValue, setSortValue] = useState('created_at:desc')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState<10 | 20>(10)
+  const [total, setTotal] = useState(0)
+  const [listLoading, setListLoading] = useState(true)
+  const [overviewLoading, setOverviewLoading] = useState(true)
+  const [listError, setListError] = useState('')
+  const [overviewError, setOverviewError] = useState('')
+  const filterValues = useMemo(() => ({ search, status: statusFilter, department_id: departmentFilter }), [search, statusFilter, departmentFilter])
+  const [sortBy, sortOrder] = sortValue.split(':') as [RequestFilters['sort_by'], RequestFilters['sort_order']]
+
+  useEffect(() => { api.listDepartments().then(setDepartments).catch(() => setListError('Could not load department filters.')) }, [])
   useEffect(() => {
     let active = true
-    api.listRequests().then((rows) => { if (active) setRequests(rows) }).catch((failure: unknown) => { if (active) setError(failure instanceof Error ? failure.message : 'Could not load purchase requests.') }).finally(() => { if (active) setLoading(false) })
+    setListLoading(true); setListError('')
+    api.searchRequests({ ...filterValues, sort_by: sortBy, sort_order: sortOrder, page, page_size: pageSize })
+      .then((result) => { if (active) { setRequests(result.items); setTotal(result.total) } })
+      .catch((failure: unknown) => { if (active) setListError(failure instanceof Error ? failure.message : 'Could not load purchase requests.') })
+      .finally(() => { if (active) setListLoading(false) })
     return () => { active = false }
-  }, [])
+  }, [filterValues, sortBy, sortOrder, page, pageSize])
+  useEffect(() => {
+    let active = true
+    setOverviewLoading(true); setOverviewError('')
+    api.requestOverview(filterValues)
+      .then((result) => { if (active) setOverview(result) })
+      .catch((failure: unknown) => { if (active) setOverviewError(failure instanceof Error ? failure.message : 'Could not load request overview.') })
+      .finally(() => { if (active) setOverviewLoading(false) })
+    return () => { active = false }
+  }, [filterValues])
+
+  const filtersActive = Boolean(search || statusFilter || departmentFilter !== '')
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const clearFilters = () => { setSearch(''); setStatusFilter(''); setDepartmentFilter(''); setSortValue('created_at:desc'); setPage(1) }
+  const resetPage = () => setPage(1)
 
   return (
     <main className="page-shell app-shell">
       <TopBar navigate={navigate} user={user} onSignOut={onSignOut} />
-      <section className="page-heading"><div><p className="eyebrow"><span className="eyebrow-dot" /> {user.role === 'admin' ? 'ADMIN WORKSPACE' : 'REQUESTER WORKSPACE'}</p><h1 className="page-title">Purchase requests</h1><p className="hero-copy">{user.role === 'admin' ? 'Review the request queue and open a request to see its history.' : 'Create a draft, refine the details, and submit when it is ready.'}</p></div>{user.role === 'requester' && <button className="button button-primary" onClick={() => navigate('/requests/new')}>New request <span aria-hidden="true">+</span></button>}</section>
+      <section className="page-heading workspace-page-heading"><div><p className="eyebrow"><span className="eyebrow-dot" /> {user.role === 'admin' ? 'ADMIN WORKSPACE' : 'REQUESTER WORKSPACE'}</p><h1 className="page-title">Purchase requests</h1><p className="hero-copy">{user.role === 'admin' ? 'Review the request queue and open a request to see its history.' : 'Create a draft, refine the details, and submit when it is ready.'}</p></div>{user.role === 'requester' && <button className="button button-primary" onClick={() => navigate('/requests/new')}>New request <span aria-hidden="true">+</span></button>}</section>
       {notice && <p className="notice notice-error page-notice">{notice}</p>}
-      <section className="table-card" aria-labelledby="request-list-title">
-        <div className="table-heading"><div><p className="section-kicker">REQUEST REGISTER</p><h2 id="request-list-title">{requests.length} {requests.length === 1 ? 'request' : 'requests'}</h2></div><span className="table-role">{user.role === 'admin' ? 'All departments' : user.department_name ?? 'My requests'}</span></div>
-        {loading ? <div className="state-block">Loading purchase requests…</div> : error ? <div className="state-block"><p className="notice notice-error">{error}</p><button className="button button-secondary" onClick={() => window.location.reload()}>Try again</button></div> : requests.length === 0 ? <div className="empty-state"><span className="empty-icon" aria-hidden="true">＋</span><h3>No requests yet</h3><p>{user.role === 'admin' ? 'Requests will appear here when applicants create them.' : 'Start with a draft. You can save it now and finish the details later.'}</p>{user.role === 'requester' && <button className="button button-primary" onClick={() => navigate('/requests/new')}>Create a request</button>}</div> : (
-          <div className="table-scroll"><table className="request-table"><thead><tr><th>Request</th>{user.role === 'admin' && <th>Applicant</th>}<th>Department</th><th>Amount</th><th>Status</th><th>Updated</th><th><span className="sr-only">Open request</span></th></tr></thead><tbody>
-            {requests.map((request) => <tr key={request.id}><td><span className="request-title">{request.title || 'Untitled draft'}</span><span className="request-subtitle">{request.vendor || 'Vendor not set'}</span></td>{user.role === 'admin' && <td>{request.requester_name}</td>}<td>{request.department_name ?? 'Not set'}</td><td className="amount-cell">{formatMoney(request.amount)}</td><td><StatusBadge status={request.status} /></td><td>{formatDate(request.updated_at)}</td><td><button className="row-link" onClick={() => navigate(`/requests/${request.id}`)}>View <span aria-hidden="true">→</span></button></td></tr>)}
-          </tbody></table></div>
-        )}
+      <section className="overview-section" aria-labelledby="overview-title">
+        <div className="overview-heading"><div><p className="section-kicker">REQUEST OVERVIEW</p><h2 id="overview-title">At a glance</h2></div><span className="overview-scope">All matching requests · independent of page and sort</span></div>
+        {overviewLoading && !overview ? <div className="overview-loading">Loading overview…</div> : overviewError ? <p className="notice notice-error" role="alert">{overviewError}</p> : overview && <>
+          <div className="metric-grid"><MetricCard label="Total requests" value={String(overview.total_requests)} loading={overviewLoading} /><MetricCard label="Pending review" value={String(overview.pending_review)} loading={overviewLoading} /><MetricCard label="Changes requested" value={String(overview.changes_requested)} loading={overviewLoading} /><MetricCard label="Approved amount · USD" value={formatMoney(overview.approved_amount)} loading={overviewLoading} /></div>
+          <div className="chart-grid"><BreakdownChart title="Requests by status" rows={overview.requests_by_status.map((row) => ({ label: row.status, count: row.count, color: chartColor(row.status) }))} total={overview.total_requests} /><BreakdownChart title="Requests by department" rows={overview.requests_by_department.map((row) => ({ label: row.department_name ?? 'No department', count: row.count, color: '#438c83' }))} total={overview.total_requests} /></div>
+        </>}
       </section>
-      <footer className="footer"><span>CampusOps</span><span>Requests are stored in your local PostgreSQL database.</span></footer>
+      <section className="table-card request-register" aria-labelledby="request-list-title">
+        <div className="table-heading"><div><p className="section-kicker">REQUEST REGISTER</p><h2 id="request-list-title">{total} {total === 1 ? 'request' : 'requests'}</h2></div><span className="table-role">{user.role === 'admin' ? 'All departments' : user.department_name ?? 'My requests'}</span></div>
+        <div className="filter-bar" aria-label="Search and filter requests">
+          <label className="filter-field search-filter"><span>Search title</span><input className="text-input" type="search" maxLength={120} placeholder="Search by keyword" value={search} onChange={(event) => { setSearch(event.target.value); resetPage() }} /></label>
+          <label className="filter-field"><span>Status</span><select className="text-input" value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value as RequestStatus | ''); resetPage() }}><option value="">All statuses</option>{(['Draft', 'Submitted', 'Returned', 'Approved'] as RequestStatus[]).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+          <label className="filter-field"><span>Department</span><select className="text-input" value={departmentFilter} onChange={(event) => { setDepartmentFilter(event.target.value ? Number(event.target.value) : ''); resetPage() }}><option value="">All departments</option>{departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</select></label>
+          <label className="filter-field sort-filter"><span>Sort by</span><select className="text-input" value={sortValue} onChange={(event) => { setSortValue(event.target.value); resetPage() }}><option value="created_at:desc">Newest created</option><option value="created_at:asc">Oldest created</option><option value="amount:desc">Amount: high to low</option><option value="amount:asc">Amount: low to high</option></select></label>
+          <button className="text-button clear-filters" onClick={clearFilters} disabled={!filtersActive && sortValue === 'created_at:desc'}>Clear filters</button>
+        </div>
+        {listError ? <div className="state-block"><p className="notice notice-error" role="alert">{listError}</p><button className="button button-secondary" onClick={() => window.location.reload()}>Try again</button></div> : listLoading ? <div className="state-block" aria-live="polite">Loading purchase requests…</div> : requests.length === 0 ? <div className="empty-state"><span className="empty-icon" aria-hidden="true">＋</span><h3>{filtersActive ? 'No matching requests' : 'No requests yet'}</h3><p>{filtersActive ? 'Try changing your search or filters.' : user.role === 'admin' ? 'Requests will appear here when applicants create them.' : 'Start with a draft. You can save it now and finish the details later.'}</p>{filtersActive ? <button className="button button-secondary" onClick={clearFilters}>Clear filters</button> : user.role === 'requester' && <button className="button button-primary" onClick={() => navigate('/requests/new')}>Create a request</button>}</div> : <>
+          <div className="table-scroll"><table className="request-table"><thead><tr><th>Request</th>{user.role === 'admin' && <th>Applicant</th>}<th>Department</th><th>Amount (USD)</th><th>Status</th><th>Created</th><th><span className="sr-only">Open request</span></th></tr></thead><tbody>{requests.map((request) => <tr key={request.id}><td><span className="request-title">{request.title || 'Untitled draft'}</span><span className="request-subtitle">{request.vendor || 'Vendor not set'}</span></td>{user.role === 'admin' && <td>{request.requester_name}</td>}<td>{request.department_name ?? 'Not set'}</td><td className="amount-cell">{formatMoney(request.amount)}</td><td><StatusBadge status={request.status} /></td><td>{formatDate(request.created_at)}</td><td><button className="row-link" onClick={() => navigate(`/requests/${request.id}`)}>View <span aria-hidden="true">→</span></button></td></tr>)}</tbody></table></div>
+          <div className="pagination"><span className="pagination-range">Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total}</span><label className="page-size-label">Rows <select className="page-size-select" value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value) as 10 | 20); resetPage() }}><option value={10}>10</option><option value={20}>20</option></select></label><div className="pagination-controls"><button className="button button-secondary" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={page <= 1}>Previous</button><span>Page {page} of {totalPages}</span><button className="button button-secondary" onClick={() => setPage((value) => Math.min(totalPages, value + 1))} disabled={page >= totalPages}>Next</button></div></div>
+        </>}
+      </section>
+      <footer className="footer"><span>CampusOps</span><span>Amounts are shown in USD. Overview metrics cover all matching requests.</span></footer>
     </main>
   )
 }
+
+function MetricCard({ label, value, loading }: { label: string; value: string; loading: boolean }) {
+  return <article className="metric-card"><p>{label}</p><strong>{loading ? 'Updating…' : value}</strong></article>
+}
+
+function BreakdownChart({ title, rows, total }: { title: string; rows: { label: string; count: number; color: string }[]; total: number }) {
+  const max = Math.max(1, ...rows.map((row) => row.count))
+  return <section className="chart-card" aria-label={title}><div className="chart-heading"><h3>{title}</h3><span>{total} total</span></div>{total === 0 || rows.length === 0 ? <div className="chart-empty">No matching requests</div> : <div className="bar-list">{rows.map((row) => <div className="bar-row" key={row.label}><span className="bar-label">{row.label}</span><span className="bar-track"><span className="bar-fill" style={{ width: `${(row.count / max) * 100}%`, backgroundColor: row.color }} /></span><strong className="bar-count">{row.count}</strong></div>)}</div>}</section>
+}
+
+function chartColor(status: RequestStatus) {
+  return ({ Draft: '#8797a1', Submitted: '#397095', Returned: '#c2854f', Approved: '#438c6a' })[status]
+}
+
 
 const EMPTY_DRAFT: RequestDraft = { title: '', description: '', vendor: '', department_id: null, amount: '0.00' }
 
