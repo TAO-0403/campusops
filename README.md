@@ -122,9 +122,29 @@ The workspace supports title search, status and department filters, creation-tim
 
 ## Screenshots
 
-No screenshots are included yet. Add screenshots only after capturing the actual application running locally; do not use mockups or generated product images as screenshots.
+All screenshots show the real application with fictional demonstration data. CampusOps has not been put into use by any school.
 
-Useful real-page captures to add later are the public home page, a requester workspace, an administrator workspace, and a request detail page showing its activity history.
+### Administrator workspace and overview
+
+![Administrator workspace with request totals, status and department charts, and the request register.](docs/screenshots/02-admin-dashboard.png)
+
+### Submitted requests filtered and sorted by amount
+
+![The request register filtered to Submitted requests and sorted from highest to lowest amount.](docs/screenshots/03-filtered-requests.png)
+
+### Applicant workspace
+
+![The applicant workspace showing Alex Morgan's requests and request overview.](docs/screenshots/04-applicant-dashboard.png)
+
+### Administrator review
+
+![An administrator reviewing a submitted request with optional approval comments and a required return reason.](docs/screenshots/06-admin-review.png)
+
+### Approved result and activity history
+
+![An approved request with its complete activity history, including return and resubmission events.](docs/screenshots/08-approved-history.png)
+
+See the [complete screenshot showcase](docs/showcase.md) for all eight pages in sequence.
 
 ## Verification
 
