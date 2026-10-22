@@ -1,43 +1,77 @@
 # CampusOps
 
-CampusOps is a campus procurement workspace built with React, TypeScript, FastAPI, and PostgreSQL. This first stage provides a landing page and a live backend and database health check.
+CampusOps is a campus procurement workspace built with React, TypeScript, FastAPI, and PostgreSQL. Applicants can save, edit, and submit purchase requests. Administrators can review all requests and their activity history.
 
 ## Requirements
 
 - Python 3.11
 - Node.js 22 and npm
-- PostgreSQL 18 with a local `campusops` database and `campusops_app` role
+- PostgreSQL 18
 
-## Configure the database
+## First-time setup
 
-Create `D:\code\campusops\.env` by copying `.env.example`. Set `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, and `PGPASSWORD` to your local PostgreSQL connection values. Enter your database password only in this local file. Passwords are passed as a separate driver field, so special characters do not need URL encoding. The `.env` file is excluded from Git.
+Create `D:\code\campusops\.env` by copying `.env.example`. Set `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, and `PGPASSWORD` to your local PostgreSQL connection values. Keep the database password in this local file only. The driver receives connection fields separately, so password characters do not need URL encoding. The `.env` file is excluded from Git.
 
-## Start the backend
-
-In PowerShell, from the project directory:
+In PowerShell:
 
 ```powershell
 cd D:\code\campusops
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --reload --port 8000
+cd backend
+..\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+..\.venv\Scripts\python.exe -m app.migrate
+..\.venv\Scripts\python.exe -m app.seed_demo
 ```
 
-The API health check is available at `http://127.0.0.1:8000/api/health`. Interactive API documentation is available at `http://127.0.0.1:8000/docs`. The check runs a real `SELECT 1` query and returns HTTP 503 when PostgreSQL is unreachable.
+Migrations are versioned and applied in order. They add tables and indexes without dropping or recreating the database. The demo seed can be run again safely.
 
-## Start the frontend
-
-Open a second PowerShell window:
+Install frontend dependencies once:
 
 ```powershell
 cd D:\code\campusops\frontend
 npm install
+```
+
+## Daily startup
+
+In one PowerShell window:
+
+```powershell
+cd D:\code\campusops\backend
+..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+```
+
+In a second PowerShell window:
+
+```powershell
+cd D:\code\campusops\frontend
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173` to view the CampusOps home page and live service status.
+Open `http://127.0.0.1:5173`. The API health check is at `http://127.0.0.1:8000/api/health`; it runs a real `SELECT 1` query and returns HTTP 503 if PostgreSQL is unavailable. Interactive API documentation is at `http://127.0.0.1:8000/docs`.
 
-## Build the frontend
+## Demo accounts
+
+Run `python -m app.seed_demo` from the `backend` directory to create or refresh these local demo accounts. Demo passwords are separate from the PostgreSQL password.
+
+| Role | Email | Password |
+|---|---|---|
+| Requester | `alex.morgan@campusops.test` | `Northstar-Applicant-2026!` |
+| Requester | `jordan.taylor@campusops.test` | `Riverstone-Applicant-2026!` |
+| Administrator | `casey.lee@campusops.test` | `Harbor-Admin-2026!` |
+
+These credentials are for local demonstration only. Passwords are stored as Argon2 hashes.
+
+## Verification
+
+Create an empty PostgreSQL database named `campusops_test` owned by `campusops_app` using a local PostgreSQL administrator. The test suite refuses to run when its configured database matches the development database and only clears request, user, and session data inside the `_test` database. It never clears the development database.
+
+```powershell
+cd D:\code\campusops\backend
+..\.venv\Scripts\python.exe -m pytest -q
+```
+
+Build the frontend with:
 
 ```powershell
 cd D:\code\campusops\frontend
@@ -46,4 +80,4 @@ npm run build
 
 ## Current scope
 
-The first stage does not include authentication, purchase requests, approvals, activity history, analytics, or deployment.
+Authentication, request drafts, request submission, and activity history are included. Approval, return, analytics, and deployment are not included in this stage.

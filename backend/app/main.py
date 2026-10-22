@@ -5,7 +5,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.auth import router as auth_router
 from app.config import get_database_settings
+from app.purchasing import router as purchasing_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("campusops")
@@ -19,10 +21,13 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_credentials=False,
-    allow_methods=["GET"],
-    allow_headers=["*"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_headers=["Content-Type", "X-CSRF-Token"],
 )
+
+app.include_router(auth_router, prefix="/api")
+app.include_router(purchasing_router, prefix="/api")
 
 
 @app.get("/api/health", tags=["health"])
