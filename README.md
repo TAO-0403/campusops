@@ -1,6 +1,29 @@
 # CampusOps
 
-CampusOps is a campus procurement workspace built with React, TypeScript, FastAPI, and PostgreSQL. Applicants can save, edit, and submit purchase requests. Administrators can review all requests and their activity history.
+CampusOps is an independent software development demonstration of a campus procurement request and review workflow. It brings request entry, administrator decisions, and the record of those decisions into one small web application. It has not been deployed or approved for use by any school and is not intended for real procurement decisions.
+
+## Project overview
+
+The intended users are campus staff or departments requesting supplies and administrators reviewing those requests. Requesters can create and manage their own drafts, submit requests, respond to returns, and view their request history. Administrators can search and review all requests, approve or return submissions, and inspect the complete history.
+
+The React and TypeScript single-page application calls a Python FastAPI REST API. FastAPI verifies an opaque, server-side session cookie and CSRF token, applies ownership and role checks, and uses PostgreSQL for users, departments, requests, sessions, and activity history. Passwords are stored as Argon2 hashes. Versioned SQL migrations evolve the schema without rebuilding the database.
+
+## Features and permissions
+
+| Role | Available actions |
+|---|---|
+| Requester | Create and edit own Draft requests; submit Draft requests; edit Returned requests and explicitly resubmit; view own requests and histories. |
+| Administrator | View and search all requests; approve or return Submitted requests; view request histories. |
+
+Submitted and Approved requests cannot be edited. A return requires a reason. Status changes and their history events are saved in one database transaction. The workspace includes server-side search, status and department filters, creation-time and amount sorting, pagination, and filtered aggregate request overviews.
+
+## Technology stack
+
+- Frontend: React 19, TypeScript 5.8, Vite 6
+- Backend: Python 3.11, FastAPI, Pydantic, psycopg 3
+- Database: PostgreSQL 18
+- Authentication: Argon2 password hashing, server-side sessions, and CSRF protection
+- Tests: pytest with a separate `campusops_test` database
 
 ## Requirements
 
@@ -10,7 +33,16 @@ CampusOps is a campus procurement workspace built with React, TypeScript, FastAP
 
 ## First-time setup
 
-Create `D:\code\campusops\.env` by copying `.env.example`. Set `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, and `PGPASSWORD` to your local PostgreSQL connection values. Keep the database password in this local file only. The driver receives connection fields separately, so password characters do not need URL encoding. The `.env` file is excluded from Git.
+Before starting, use pgAdmin or a local PostgreSQL administrator to create a `campusops_app` login role and an empty `campusops` database owned by that role. Set the role password locally in PostgreSQL; never paste it into source code or documentation.
+
+Create `D:\code\campusops\.env` by copying `.env.example`. Set `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, and `PGPASSWORD` for that local database (`PGDATABASE=campusops`, `PGUSER=campusops_app`). Keep the database password in this local file only. The driver receives connection fields separately, so password characters do not need URL encoding. The `.env` file is excluded from Git.
+
+```powershell
+cd D:\code\campusops
+Copy-Item .env.example .env
+```
+
+Open `.env` in a local editor and replace only the password placeholder with the PostgreSQL role password. Do not share that file.
 
 In PowerShell:
 
@@ -62,6 +94,22 @@ Run `python -m app.seed_demo` from the `backend` directory to create or refresh 
 
 These credentials are for local demonstration only. Passwords are stored as Argon2 hashes.
 
+## Optional showcase requests
+
+The application works with an empty request table. For a fuller local presentation, an optional script can add 25 fictional requests across the two requester accounts, departments, amounts, and all four statuses. It writes matching Created, Submitted, Returned, and Approved history events. It never changes existing users, requests, or history, and repeated runs skip records it previously added.
+
+The script refuses to connect unless the local environment explicitly selects `PGDATABASE=campusops`, a loopback `PGHOST`, and the `campusops_app` role, and the current PowerShell session opts in. Run it manually only after first-time setup and migration:
+
+```powershell
+cd D:\code\campusops
+$env:CAMPUSOPS_ALLOW_DEMO_DATA = "1"
+cd backend
+..\.venv\Scripts\python.exe -m app.seed_demo_requests
+Remove-Item Env:CAMPUSOPS_ALLOW_DEMO_DATA
+```
+
+The script uses the local `.env` database fields and does not print the database password. It is not part of the startup command and does not seed the test database.
+
 ## Request review workflow
 
 Applicants can save and edit a draft, then submit it for review. Submitted requests are locked while an administrator reviews them. An administrator can approve a request with an optional comment or return it with a required reason. The applicant can edit a returned request; edits keep it in Returned until the applicant explicitly resubmits it. Every submission, resubmission, return, and approval is recorded with its actor, timestamp, status transition, and comment when provided.
@@ -71,6 +119,12 @@ To try the full workflow, sign in as Alex, create and submit a request, then sig
 ## Search and overview
 
 The workspace supports title search, status and department filters, creation-time or amount sorting, and 10- or 20-row pages. Search, filters, and sorting run on the server, and the result total is shown above the table. Overview cards and charts use the same search and filters across all matching requests, independent of the selected page and sort order. **Approved amount** sums only requests in Approved status and is shown in USD; it does not represent paid or spent funds. The homepage service health check is inside the collapsed **Development information** section.
+
+## Screenshots
+
+No screenshots are included yet. Add screenshots only after capturing the actual application running locally; do not use mockups or generated product images as screenshots.
+
+Useful real-page captures to add later are the public home page, a requester workspace, an administrator workspace, and a request detail page showing its activity history.
 
 ## Verification
 
@@ -90,4 +144,4 @@ npm run build
 
 ## Current scope
 
-Authentication, request drafts, submission, administrator approval and return, returned-request editing and resubmission, activity history, server-side request search and filtering, pagination, sorting, and aggregate request overview charts are included. Attachments, email notifications, and deployment are not included.
+This standalone demonstration does not include school SSO, production account provisioning, attachments, email notifications, accounting or payment integration, procurement policy configuration, deployment, or production security review. Demo users and showcase requests are fictional. The application has not been put into school service.

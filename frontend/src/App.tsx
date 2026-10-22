@@ -196,7 +196,7 @@ function DashboardPage({ user, navigate, onSignOut, notice }: { user: User; navi
     return () => { active = false }
   }, [filterValues])
 
-  const filtersActive = Boolean(search || statusFilter || departmentFilter !== '')
+  const filtersActive = Boolean(search.trim() || statusFilter || departmentFilter !== '')
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const clearFilters = () => { setSearch(''); setStatusFilter(''); setDepartmentFilter(''); setSortValue('created_at:desc'); setPage(1) }
   const resetPage = () => setPage(1)
@@ -208,7 +208,7 @@ function DashboardPage({ user, navigate, onSignOut, notice }: { user: User; navi
       {notice && <p className="notice notice-error page-notice">{notice}</p>}
       <section className="overview-section" aria-labelledby="overview-title">
         <div className="overview-heading"><div><p className="section-kicker">REQUEST OVERVIEW</p><h2 id="overview-title">At a glance</h2></div><span className="overview-scope">All matching requests · independent of page and sort</span></div>
-        {overviewLoading && !overview ? <div className="overview-loading">Loading overview…</div> : overviewError ? <p className="notice notice-error" role="alert">{overviewError}</p> : overview && <>
+        {overviewLoading ? <div className="overview-loading" aria-live="polite">Updating overview…</div> : overviewError ? <p className="notice notice-error" role="alert">{overviewError}</p> : overview && <>
           <div className="metric-grid"><MetricCard label="Total requests" value={String(overview.total_requests)} loading={overviewLoading} /><MetricCard label="Pending review" value={String(overview.pending_review)} loading={overviewLoading} /><MetricCard label="Changes requested" value={String(overview.changes_requested)} loading={overviewLoading} /><MetricCard label="Approved amount · USD" value={formatMoney(overview.approved_amount)} loading={overviewLoading} /></div>
           <div className="chart-grid"><BreakdownChart title="Requests by status" rows={overview.requests_by_status.map((row) => ({ label: row.status, count: row.count, color: chartColor(row.status) }))} total={overview.total_requests} /><BreakdownChart title="Requests by department" rows={overview.requests_by_department.map((row) => ({ label: row.department_name ?? 'No department', count: row.count, color: '#438c83' }))} total={overview.total_requests} /></div>
         </>}
