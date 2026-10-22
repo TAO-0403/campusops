@@ -32,6 +32,13 @@ REQUESTER_EMAILS = ("alex.morgan@campusops.test", "jordan.taylor@campusops.test"
 ADMIN_EMAIL = "casey.lee@campusops.test"
 
 
+def _sample_event_timestamps(now: datetime, index: int) -> tuple[datetime, datetime, datetime]:
+    created_at = now - timedelta(days=len(TITLES) - index)
+    submitted_at = created_at + timedelta(hours=2)
+    decision_at = submitted_at + timedelta(hours=3)
+    return created_at, submitted_at, decision_at
+
+
 def _require_explicit_local_database() -> None:
     if os.getenv("CAMPUSOPS_ALLOW_DEMO_DATA") != "1":
         raise SystemExit("Set CAMPUSOPS_ALLOW_DEMO_DATA=1 in this PowerShell session to enable demo data seeding.")
@@ -97,9 +104,7 @@ def seed_demo_requests() -> int:
             requester_id = users[REQUESTER_EMAILS[index % len(REQUESTER_EMAILS)]]
             department_id = departments[DEPARTMENT_CODES[index % len(DEPARTMENT_CODES)]]
             amount = f"{125 + index * 73}.{(index * 37) % 100:02d}"
-            created_at = now - timedelta(days=24 - index)
-            submitted_at = created_at + timedelta(hours=2)
-            decision_at = submitted_at + timedelta(hours=3)
+            created_at, submitted_at, decision_at = _sample_event_timestamps(now, index)
             final_status = SHOWCASE_STATUSES[index]
 
             request = connection.execute(

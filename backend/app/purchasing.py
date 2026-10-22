@@ -106,7 +106,7 @@ def _serialize_events(connection: Connection, request_id: int) -> list[dict]:
         FROM request_events AS e
         JOIN users AS u ON u.id = e.actor_id
         WHERE e.request_id = %s
-        ORDER BY e.created_at, e.id
+        ORDER BY e.id
         """,
         (request_id,),
     ).fetchall()

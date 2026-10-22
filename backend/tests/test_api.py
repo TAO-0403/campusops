@@ -1,8 +1,11 @@
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
+from app.db import connect
 from app.main import app
+from app.seed_demo_requests import SHOWCASE_STATUSES, TITLES, _sample_event_timestamps
 
 APPLICANT_A = "alex.morgan@campusops.test"
 APPLICANT_A_PASSWORD = "Northstar-Applicant-2026!"
@@ -229,6 +232,13 @@ def test_complete_return_resubmit_approval_history() -> None:
         assert approved.status_code == 200
         assert approved.json()["status"] == "Approved"
         assert admin.post(f"/api/requests/{request_id}/approve", json={}, headers={"X-CSRF-Token": admin_csrf}).status_code == 409
+
+        # A future-dated legacy event must not reorder the persisted transition history.
+        with connect() as connection:
+            connection.execute(
+                "UPDATE request_events SET created_at = now() + interval '1 day' WHERE request_id = %s AND event_type = 'Submitted'",
+                (request_id,),
+            )
         detail = admin.get(f"/api/requests/{request_id}").json()
 
     transitions = [(event["previous_status"], event["new_status"]) for event in detail["events"] if event["event_type"] in ("Submitted", "Returned", "Resubmitted", "Approved")]
@@ -240,6 +250,18 @@ def test_complete_return_resubmit_approval_history() -> None:
     assert decisions["Resubmitted"]["comment"] == "Added the requested teaching details."
     assert decisions["Approved"]["comment"] == "Approved for the spring labs."
     assert all(event["created_at"] for event in decisions.values())
+
+
+def test_showcase_event_timestamps_are_past_and_follow_transitions() -> None:
+    now = datetime.now(timezone.utc)
+    for index, final_status in enumerate(SHOWCASE_STATUSES):
+        created_at, submitted_at, decision_at = _sample_event_timestamps(now, index)
+        assert created_at < submitted_at < decision_at < now
+        if final_status != "Draft":
+            assert created_at < submitted_at
+        if final_status in ("Returned", "Approved"):
+            assert submitted_at < decision_at
+    assert len(TITLES) == len(SHOWCASE_STATUSES)
 
 
 def test_return_requires_nonblank_reason_and_only_submitted_requests_can_transition() -> None:
