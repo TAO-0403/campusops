@@ -1,7 +1,11 @@
+import csv
+import io
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from psycopg import Connection
 
 from app.db import connect
@@ -153,6 +157,88 @@ def list_requests(
             (*parameters, page_size, offset),
         ).fetchall()
     return {"items": [_serialize_request(row) for row in rows], "total": total, "page": page, "page_size": page_size}
+
+
+CSV_HEADERS = (
+    "Request ID",
+    "Title",
+    "Applicant",
+    "Department",
+    "Vendor",
+    "Amount (USD)",
+    "Status",
+    "Created At",
+    "Updated At",
+)
+
+
+def _csv_text(value: str | None) -> str:
+    text = value or ""
+    if text.lstrip().startswith(("=", "+", "-", "@")):
+        return f"'{text}"
+    return text
+
+
+def _csv_timestamp(value: datetime) -> str:
+    if value.tzinfo is None or value.utcoffset() is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
+
+
+@router.get("/requests/export.csv")
+def export_requests_csv(
+    search: str | None = Query(default=None, max_length=120),
+    request_status: Literal["Draft", "Submitted", "Returned", "Approved"] | None = Query(default=None, alias="status"),
+    department_id: int | None = Query(default=None, gt=0),
+    sort_by: Literal["created_at", "amount"] = "created_at",
+    sort_order: Literal["asc", "desc"] = "desc",
+    context: AuthContext = Depends(get_auth_context),
+) -> Response:
+    if context.user["role"] != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only administrators can export purchase requests.")
+
+    clauses, parameters = _request_filters(context, search, request_status, department_id)
+    where_sql = " AND ".join(clauses)
+    order_column = SORT_COLUMNS[sort_by]
+    direction = "ASC" if sort_order == "asc" else "DESC"
+    with connect() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT r.id, r.title, u.full_name AS requester_name, d.name AS department_name,
+                   r.vendor, r.amount, r.status, r.created_at, r.updated_at
+            FROM purchase_requests AS r
+            LEFT JOIN departments AS d ON d.id = r.department_id
+            JOIN users AS u ON u.id = r.requester_id
+            WHERE {where_sql}
+            ORDER BY {order_column} {direction}, r.id {direction}
+            """,
+            parameters,
+        ).fetchall()
+
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\r\n")
+    writer.writerow(CSV_HEADERS)
+    for row in rows:
+        writer.writerow(
+            (
+                row["id"],
+                _csv_text(row["title"]),
+                _csv_text(row["requester_name"]),
+                _csv_text(row["department_name"]),
+                _csv_text(row["vendor"]),
+                format(row["amount"], ".2f"),
+                row["status"],
+                _csv_timestamp(row["created_at"]),
+                _csv_timestamp(row["updated_at"]),
+            )
+        )
+
+    filename = f"campusops-requests-{datetime.now(timezone.utc):%Y-%m-%d}.csv"
+    return Response(
+        content="\ufeff" + output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 def _request_filters(

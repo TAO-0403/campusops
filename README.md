@@ -13,7 +13,7 @@ The React and TypeScript single-page application calls a Python FastAPI REST API
 | Role | Available actions |
 |---|---|
 | Requester | Create and edit own Draft requests; submit Draft requests; edit Returned requests and explicitly resubmit; view own requests and histories. |
-| Administrator | View and search all requests; approve or return Submitted requests; view request histories. |
+| Administrator | View and search all requests; approve or return Submitted requests; view request histories; export matching requests to CSV. |
 
 Submitted and Approved requests cannot be edited. A return requires a reason. Status changes and their history events are saved in one database transaction. The workspace includes server-side search, status and department filters, creation-time and amount sorting, pagination, and filtered aggregate request overviews.
 
@@ -118,7 +118,7 @@ To try the full workflow, sign in as Alex, create and submit a request, then sig
 
 ## Search and overview
 
-The workspace supports title search, status and department filters, creation-time or amount sorting, and 10- or 20-row pages. Search, filters, and sorting run on the server, and the result total is shown above the table. Overview cards and charts use the same search and filters across all matching requests, independent of the selected page and sort order. **Approved amount** sums only requests in Approved status and is shown in USD; it does not represent paid or spent funds. The homepage service health check is inside the collapsed **Development information** section.
+The workspace supports title search, status and department filters, creation-time or amount sorting, and 10- or 20-row pages. Search, filters, and sorting run on the server, and the result total is shown above the table. Administrators can select **Export CSV** to download every request matching the current search, status, department, and sort order; the export is independent of the selected page and page size. The server restricts this endpoint to administrators. Overview cards and charts use the same search and filters across all matching requests, independent of the selected page and sort order. **Approved amount** sums only requests in Approved status and is shown in USD; it does not represent paid or spent funds. The homepage service health check is inside the collapsed **Development information** section.
 
 ## Screenshots
 

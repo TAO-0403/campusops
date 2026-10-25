@@ -1,5 +1,8 @@
 from concurrent.futures import ThreadPoolExecutor
+import csv
+import io
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from fastapi.testclient import TestClient
 
@@ -414,3 +417,154 @@ def test_request_overview_aggregates_all_matching_records_and_respects_user_scop
     assert {row["department_name"]: row["count"] for row in overview_page_one["requests_by_department"]} == {
         "Science": 2, "Library": 2,
     }
+
+
+def _parse_csv_export(response) -> list[dict[str, str]]:
+    assert response.content.startswith(b"\xef\xbb\xbf")
+    return list(csv.DictReader(io.StringIO(response.content.decode("utf-8-sig"), newline="")))
+
+
+def test_csv_export_requires_admin_and_returns_download() -> None:
+    with TestClient(app) as anonymous:
+        assert anonymous.get("/api/requests/export.csv").status_code == 401
+
+    with TestClient(app) as applicant:
+        sign_in(applicant, APPLICANT_A, APPLICANT_A_PASSWORD)
+        assert applicant.get("/api/requests/export.csv").status_code == 403
+
+    with TestClient(app) as admin:
+        sign_in(admin, ADMIN, ADMIN_PASSWORD)
+        response = admin.get("/api/requests/export.csv")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert 'attachment; filename="campusops-requests-' in response.headers["content-disposition"]
+    reader = csv.reader(io.StringIO(response.content.decode("utf-8-sig"), newline=""))
+    assert next(reader) == [
+        "Request ID", "Title", "Applicant", "Department", "Vendor",
+        "Amount (USD)", "Status", "Created At", "Updated At",
+    ]
+    assert list(reader) == []
+
+
+def test_csv_export_applies_filters_sorting_and_ignores_page_limits() -> None:
+    with TestClient(app) as applicant:
+        csrf = sign_in(applicant, APPLICANT_A, APPLICANT_A_PASSWORD)
+        departments = applicant.get("/api/departments").json()
+        science = next(row["id"] for row in departments if row["code"] == "SCI")
+        library = next(row["id"] for row in departments if row["code"] == "LIB")
+        expected = []
+        for index in range(12):
+            amount = Decimal(10 + index % 4)
+            created = create_request(
+                applicant,
+                csrf,
+                title=f"CSV export batch {index:02d}",
+                department_id=science,
+                amount=f"{amount:.2f}",
+            )
+            assert applicant.post(
+                f"/api/requests/{created['id']}/submit",
+                headers={"X-CSRF-Token": csrf},
+            ).status_code == 200
+            expected.append((amount, created["id"]))
+
+        create_request(applicant, csrf, title="CSV export batch draft", department_id=science)
+        other_department = create_request(applicant, csrf, title="CSV export batch other department", department_id=library)
+        applicant.post(
+            f"/api/requests/{other_department['id']}/submit",
+            headers={"X-CSRF-Token": csrf},
+        )
+        unrelated = create_request(applicant, csrf, title="Unrelated submitted request", department_id=science)
+        applicant.post(f"/api/requests/{unrelated['id']}/submit", headers={"X-CSRF-Token": csrf})
+
+    with TestClient(app) as admin:
+        sign_in(admin, ADMIN, ADMIN_PASSWORD)
+        response = admin.get(
+            "/api/requests/export.csv",
+            params={
+                "search": "CSV export batch",
+                "status": "Submitted",
+                "department_id": science,
+                "sort_by": "amount",
+                "sort_order": "asc",
+                "page": 2,
+                "page_size": 10,
+            },
+        )
+
+    assert response.status_code == 200
+    rows = _parse_csv_export(response)
+    expected.sort(key=lambda item: (item[0], item[1]))
+    assert [int(row["Request ID"]) for row in rows] == [request_id for _, request_id in expected]
+    assert [row["Amount (USD)"] for row in rows] == [f"{amount:.2f}" for amount, _ in expected]
+    assert len(rows) == 12
+
+
+def test_csv_export_empty_result_special_characters_and_formula_safety() -> None:
+    with TestClient(app) as applicant:
+        csrf = sign_in(applicant, APPLICANT_A, APPLICANT_A_PASSWORD)
+        department = next(row for row in applicant.get("/api/departments").json() if row["code"] == "SCI")
+        with connect() as connection:
+            original_name = connection.execute(
+                "SELECT full_name FROM users WHERE email = %s", (APPLICANT_A,)
+            ).fetchone()["full_name"]
+            original_department = connection.execute(
+                "SELECT name FROM departments WHERE id = %s", (department["id"],)
+            ).fetchone()["name"]
+            connection.execute("UPDATE users SET full_name = %s WHERE email = %s", (" \t@Applicant!A1", APPLICANT_A))
+            connection.execute("UPDATE departments SET name = %s WHERE id = %s", ("\t-Science", department["id"]))
+
+        special_title = 'Quoted, "request"\nsecond line'
+        special_vendor = 'Vendor, "quoted"\nSupply'
+        created = create_request(
+            applicant,
+            csrf,
+            title=special_title,
+            vendor=special_vendor,
+            amount="57.5",
+        )
+        formula_request = create_request(applicant, csrf, title="Formula safety request", amount="1.00")
+        with connect() as connection:
+            connection.execute(
+                "UPDATE purchase_requests SET title = %s, vendor = %s WHERE id = %s",
+                (" \t=1+1", " +SUM(1,1)", formula_request["id"]),
+            )
+
+        try:
+            with TestClient(app) as admin:
+                sign_in(admin, ADMIN, ADMIN_PASSWORD)
+                response = admin.get("/api/requests/export.csv", params={"search": "Quoted"})
+                formula_response = admin.get("/api/requests/export.csv")
+                empty_response = admin.get("/api/requests/export.csv", params={"search": "does not exist"})
+        finally:
+            with connect() as connection:
+                connection.execute("UPDATE users SET full_name = %s WHERE email = %s", (original_name, APPLICANT_A))
+                connection.execute("UPDATE departments SET name = %s WHERE id = %s", (original_department, department["id"]))
+
+        detail = applicant.get(f"/api/requests/{created['id']}").json()
+
+    assert response.status_code == 200
+    rows = _parse_csv_export(response)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["Title"] == special_title
+    assert row["Vendor"] == special_vendor
+    assert row["Applicant"] == "' \t@Applicant!A1"
+    assert row["Department"] == "'\t-Science"
+    assert row["Amount (USD)"] == "57.50"
+    assert datetime.fromisoformat(row["Created At"]).utcoffset() is not None
+    assert datetime.fromisoformat(row["Updated At"]).utcoffset() is not None
+    assert row["Title"] == detail["title"] and row["Vendor"] == detail["vendor"]
+    formula_row = next(item for item in _parse_csv_export(formula_response) if int(item["Request ID"]) == formula_request["id"])
+    assert formula_row["Title"] == "' \t=1+1"
+    assert formula_row["Vendor"] == "' +SUM(1,1)"
+    assert formula_row["Applicant"] == "' \t@Applicant!A1"
+    assert formula_row["Department"] == "'\t-Science"
+    assert empty_response.status_code == 200
+    empty_reader = csv.reader(io.StringIO(empty_response.content.decode("utf-8-sig"), newline=""))
+    assert next(empty_reader) == [
+        "Request ID", "Title", "Applicant", "Department", "Vendor",
+        "Amount (USD)", "Status", "Created At", "Updated At",
+    ]
+    assert list(empty_reader) == []

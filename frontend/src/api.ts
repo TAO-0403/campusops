@@ -66,6 +66,32 @@ export const api = {
     params.set('page_size', String(filters.page_size))
     return apiRequest<RequestPage>(`/requests?${params.toString()}`)
   },
+  async exportRequests(filters: Pick<RequestFilters, 'search' | 'status' | 'department_id' | 'sort_by' | 'sort_order'>) {
+    const params = new URLSearchParams()
+    if (filters.search.trim()) params.set('search', filters.search.trim())
+    if (filters.status) params.set('status', filters.status)
+    if (filters.department_id !== '') params.set('department_id', String(filters.department_id))
+    params.set('sort_by', filters.sort_by)
+    params.set('sort_order', filters.sort_order)
+
+    let response: Response
+    try {
+      response = await fetch(`${API_ROOT}/requests/export.csv?${params.toString()}`, {
+        credentials: 'include',
+      })
+    } catch {
+      throw new ApiError('Could not reach CampusOps. Check that the backend is running.', 0)
+    }
+
+    if (!response.ok) {
+      const payload: unknown = await response.json().catch(() => null)
+      throw new ApiError(detailMessage(payload), response.status)
+    }
+
+    const contentDisposition = response.headers.get('Content-Disposition') ?? ''
+    const filename = contentDisposition.match(/filename="?([^";]+)"?/i)?.[1] ?? 'campusops-requests.csv'
+    return { blob: await response.blob(), filename }
+  },
   requestOverview(filters: Pick<RequestFilters, 'search' | 'status' | 'department_id'>) {
     const params = new URLSearchParams()
     if (filters.search.trim()) params.set('search', filters.search.trim())

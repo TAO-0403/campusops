@@ -173,6 +173,8 @@ function DashboardPage({ user, navigate, onSignOut, notice }: { user: User; navi
   const [overviewLoading, setOverviewLoading] = useState(true)
   const [listError, setListError] = useState('')
   const [overviewError, setOverviewError] = useState('')
+  const [exportLoading, setExportLoading] = useState(false)
+  const [exportError, setExportError] = useState('')
   const filterValues = useMemo(() => ({ search, status: statusFilter, department_id: departmentFilter }), [search, statusFilter, departmentFilter])
   const [sortBy, sortOrder] = sortValue.split(':') as [RequestFilters['sort_by'], RequestFilters['sort_order']]
 
@@ -200,6 +202,24 @@ function DashboardPage({ user, navigate, onSignOut, notice }: { user: User; navi
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const clearFilters = () => { setSearch(''); setStatusFilter(''); setDepartmentFilter(''); setSortValue('created_at:desc'); setPage(1) }
   const resetPage = () => setPage(1)
+  const exportCsv = async () => {
+    setExportLoading(true); setExportError('')
+    try {
+      const { blob, filename } = await api.exportRequests({ ...filterValues, sort_by: sortBy, sort_order: sortOrder })
+      const objectUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = objectUrl
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+    } catch (failure) {
+      setExportError(failure instanceof Error ? `Could not export requests: ${failure.message}` : 'Could not export requests. Please try again.')
+    } finally {
+      setExportLoading(false)
+    }
+  }
 
   return (
     <main className="page-shell app-shell">
@@ -214,7 +234,8 @@ function DashboardPage({ user, navigate, onSignOut, notice }: { user: User; navi
         </>}
       </section>
       <section className="table-card request-register" aria-labelledby="request-list-title">
-        <div className="table-heading"><div><p className="section-kicker">REQUEST REGISTER</p><h2 id="request-list-title">{total} {total === 1 ? 'request' : 'requests'}</h2></div><span className="table-role">{user.role === 'admin' ? 'All departments' : user.department_name ?? 'My requests'}</span></div>
+        <div className="table-heading"><div><p className="section-kicker">REQUEST REGISTER</p><h2 id="request-list-title">{total} {total === 1 ? 'request' : 'requests'}</h2></div><div className="table-heading-actions"><span className="table-role">{user.role === 'admin' ? 'All departments' : user.department_name ?? 'My requests'}</span>{user.role === 'admin' && <button className="button button-secondary export-button" type="button" onClick={() => void exportCsv()} disabled={exportLoading}>{exportLoading ? 'Exporting…' : 'Export CSV'}</button>}</div></div>
+        {exportError && <p className="notice notice-error export-error" role="alert">{exportError}</p>}
         <div className="filter-bar" aria-label="Search and filter requests">
           <label className="filter-field search-filter"><span>Search title</span><input className="text-input" type="search" maxLength={120} placeholder="Search by keyword" value={search} onChange={(event) => { setSearch(event.target.value); resetPage() }} /></label>
           <label className="filter-field"><span>Status</span><select className="text-input" value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value as RequestStatus | ''); resetPage() }}><option value="">All statuses</option>{(['Draft', 'Submitted', 'Returned', 'Approved'] as RequestStatus[]).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>

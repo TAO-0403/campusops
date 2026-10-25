@@ -108,6 +108,9 @@ h1 { margin-bottom: 18px; color: #1e3447; font-size: clamp(38px, 5.2vw, 58px); f
 .table-heading h2 { margin-bottom: 0; font-size: 17px; letter-spacing: -.45px; }
 .table-heading .section-kicker { margin-bottom: 6px; font-size: 9px; }
 .table-role { color: #7c8b94; font-size: 11px; }
+.table-heading-actions { display: flex; align-items: center; gap: 12px; }
+.export-button { min-height: 36px; }
+.export-error { margin: 0 25px 16px; }
 .table-scroll { overflow-x: auto; }
 .request-table { width: 100%; border-collapse: collapse; white-space: nowrap; }
 .request-table thead { background: #f8fafb; }
@@ -253,6 +256,8 @@ h1 { margin-bottom: 18px; color: #1e3447; font-size: clamp(38px, 5.2vw, 58px); f
   .page-heading, .detail-heading { align-items: flex-start; flex-direction: column; padding-top: 40px; }
   .page-heading > .button { align-self: stretch; }
   .table-heading { padding: 20px; }
+  .table-heading-actions { flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+  .export-error { margin-right: 20px; margin-left: 20px; }
   .request-table td:first-child, .request-table th:first-child { padding-left: 20px; }
   .request-table td:last-child, .request-table th:last-child { padding-right: 20px; }
   .form-grid { grid-template-columns: 1fr; }
