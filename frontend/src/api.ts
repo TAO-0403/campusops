@@ -1,4 +1,4 @@
-import type { AuthResponse, Department, PurchaseRequest, RequestDetail, RequestDraft, RequestFilters, RequestOverview, RequestPage } from './types'
+import type { AuthResponse, Department, PurchaseRequest, QuotationAttachment, RequestDetail, RequestDraft, RequestFilters, RequestOverview, RequestPage } from './types'
 
 const API_ROOT = 'http://127.0.0.1:8000/api'
 let csrfToken = ''
@@ -23,7 +23,7 @@ function detailMessage(payload: unknown): string {
 
 async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
-  if (init.body !== undefined && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  if (init.body !== undefined && !(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   if (csrfToken && init.method && init.method !== 'GET') headers.set('X-CSRF-Token', csrfToken)
 
   let response: Response
@@ -100,6 +100,15 @@ export const api = {
     return apiRequest<RequestOverview>(`/requests/overview?${params.toString()}`)
   },
   getRequest: (id: number) => apiRequest<RequestDetail>(`/requests/${id}`),
+  quotationAttachmentUrl(id: number, download = false) {
+    return `${API_ROOT}/requests/${id}/attachment${download ? '?download=true' : ''}`
+  },
+  uploadAttachment(id: number, file: File) {
+    const body = new FormData()
+    body.append('file', file, file.name)
+    return apiRequest<QuotationAttachment>(`/requests/${id}/attachment`, { method: 'POST', body })
+  },
+  deleteAttachment: (id: number) => apiRequest<{ deleted: boolean }>(`/requests/${id}/attachment`, { method: 'DELETE' }),
   createRequest: (draft: RequestDraft) => apiRequest<PurchaseRequest>('/requests', { method: 'POST', body: JSON.stringify(draft) }),
   updateRequest: (id: number, draft: RequestDraft) => apiRequest<PurchaseRequest>(`/requests/${id}`, { method: 'PUT', body: JSON.stringify(draft) }),
   submitRequest: (id: number) => apiRequest<PurchaseRequest>(`/requests/${id}/submit`, { method: 'POST' }),

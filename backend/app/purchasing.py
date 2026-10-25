@@ -1,13 +1,21 @@
 import csv
 import io
+import os
+import re
+import secrets
+import tempfile
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 from psycopg import Connection
+from psycopg.types.json import Jsonb
 
+from app.config import get_attachment_storage_dir
 from app.db import connect
 from app.dependencies import (
     AuthContext,
@@ -20,6 +28,141 @@ from app.schemas import ApprovalInput, RequestInput, ResubmitInput, ReturnInput
 router = APIRouter(tags=["purchase requests"])
 REQUEST_STATUSES = ("Draft", "Submitted", "Returned", "Approved")
 SORT_COLUMNS = {"created_at": "r.created_at", "amount": "r.amount"}
+MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
+PDF_HEADER = re.compile(rb"%PDF-[0-9]\.[0-9]")
+
+
+def _get_quotation_attachment(connection: Connection, request_id: int) -> dict | None:
+    return connection.execute(
+        """
+        SELECT id, request_id, original_filename, storage_id, file_size, uploaded_by, uploaded_at
+        FROM request_attachments WHERE request_id = %s
+        """,
+        (request_id,),
+    ).fetchone()
+
+
+def _serialize_attachment(row: dict | None) -> dict | None:
+    if row is None:
+        return None
+    return {
+        "original_filename": row["original_filename"],
+        "file_size": row["file_size"],
+        "uploaded_at": row["uploaded_at"],
+    }
+
+
+def _validate_attachment_filename(filename: str | None) -> str:
+    normalized = (filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+    if not normalized or not normalized.strip() or len(normalized) > 255:
+        raise HTTPException(status_code=422, detail="Choose a valid PDF filename.")
+    if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+        raise HTTPException(status_code=422, detail="The filename contains unsupported characters.")
+    if not normalized.lower().endswith(".pdf"):
+        raise HTTPException(status_code=415, detail="Quotation attachments must be PDF files.")
+    return normalized
+
+
+def _validate_pdf(content: bytes) -> None:
+    if not content:
+        raise HTTPException(status_code=422, detail="The PDF file is empty.")
+    if PDF_HEADER.search(content[:1024]) is None or b"%%EOF" not in content[-2048:]:
+        raise HTTPException(status_code=422, detail="The file is not a valid PDF document.")
+    startxref = re.search(rb"startxref\s+(\d+)\s+%%EOF\s*\Z", content[-2048:], re.DOTALL)
+    if startxref is None:
+        raise HTTPException(status_code=422, detail="The file is not a valid PDF document.")
+    xref_offset = int(startxref.group(1))
+    if xref_offset >= len(content):
+        raise HTTPException(status_code=422, detail="The file is not a valid PDF document.")
+    xref_section = content[xref_offset:]
+    if not xref_section.startswith(b"xref") and re.match(rb"\d+\s+\d+\s+obj\b", xref_section) is None:
+        raise HTTPException(status_code=422, detail="The file is not a valid PDF document.")
+
+
+def _store_attachment(content: bytes) -> tuple[str, Path]:
+    storage_dir = get_attachment_storage_dir()
+    storage_id = secrets.token_hex(32)
+    target = storage_dir / f"{storage_id}.pdf"
+    temporary_path: Path | None = None
+    try:
+        storage_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with tempfile.NamedTemporaryFile(
+            mode="wb", prefix=".campusops-upload-", suffix=".tmp", dir=storage_dir, delete=False
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            temporary_file.write(content)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, target)
+        return storage_id, target
+    except OSError as error:
+        _remove_path(temporary_path)
+        _remove_path(target)
+        raise HTTPException(status_code=500, detail="Could not save the quotation attachment.") from error
+
+
+def _remove_attachment_file(storage_id: str) -> None:
+    if re.fullmatch(r"[0-9a-f]{64}", storage_id) is None:
+        return
+    path = get_attachment_storage_dir() / f"{storage_id}.pdf"
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _content_disposition(filename: str, download: bool) -> str:
+    fallback = re.sub(r'[^A-Za-z0-9._ -]', "_", filename.encode("ascii", "ignore").decode("ascii"))
+    fallback = fallback.replace('"', "_").replace("\\", "_").strip() or "quotation.pdf"
+    disposition = "attachment" if download else "inline"
+    return f"{disposition}; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
+
+
+def _lock_editable_request(connection: Connection, request_id: int, requester_id: int) -> dict:
+    row = connection.execute(
+        "SELECT id, status FROM purchase_requests WHERE id = %s AND requester_id = %s FOR UPDATE",
+        (request_id, requester_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Purchase request not found.")
+    if row["status"] not in ("Draft", "Returned"):
+        raise HTTPException(status_code=409, detail="Attachments can only be changed for Draft or Returned requests.")
+    return row
+
+
+def _remove_path(path: Path | None) -> None:
+    if path is None:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _record_attachment_event(
+    connection: Connection,
+    request_id: int,
+    actor_id: int,
+    event_type: str,
+    request_status: str,
+    filename: str,
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO request_events
+            (request_id, actor_id, event_type, previous_status, new_status, details, comment)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            request_id,
+            actor_id,
+            event_type,
+            request_status,
+            request_status,
+            Jsonb({"filename": filename}),
+            filename,
+        ),
+    )
 
 
 def _serialize_request(row: dict) -> dict:
@@ -343,7 +486,145 @@ def get_request(request_id: int, context: AuthContext = Depends(get_auth_context
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Purchase request not found.")
         result = _serialize_request(row)
         result["events"] = _serialize_events(connection, request_id)
+        result["attachment"] = _serialize_attachment(_get_quotation_attachment(connection, request_id))
     return result
+
+
+@router.post("/requests/{request_id}/attachment")
+async def upload_quotation_attachment(
+    request_id: int,
+    file: UploadFile = File(...),
+    context: AuthContext = Depends(require_requester_with_csrf),
+) -> dict:
+    filename = _validate_attachment_filename(file.filename)
+    if file.size is not None and file.size > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(status_code=413, detail="PDF files must be 5 MB or smaller.")
+    content = await file.read(MAX_ATTACHMENT_BYTES + 1)
+    if len(content) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(status_code=413, detail="PDF files must be 5 MB or smaller.")
+    _validate_pdf(content)
+
+    new_storage_id: str | None = None
+    new_path: Path | None = None
+    previous_storage_id: str | None = None
+    try:
+        with connect() as connection:
+            request_row = _lock_editable_request(connection, request_id, context.user["id"])
+            previous = _get_quotation_attachment(connection, request_id)
+            if previous is not None:
+                previous_storage_id = previous["storage_id"]
+
+            new_storage_id, new_path = _store_attachment(content)
+            event_type = "AttachmentReplaced" if previous is not None else "AttachmentUploaded"
+            if previous is None:
+                attachment = connection.execute(
+                    """
+                    INSERT INTO request_attachments
+                        (request_id, original_filename, storage_id, file_size, uploaded_by)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id, request_id, original_filename, storage_id, file_size, uploaded_by, uploaded_at
+                    """,
+                    (request_id, filename, new_storage_id, len(content), context.user["id"]),
+                ).fetchone()
+            else:
+                attachment = connection.execute(
+                    """
+                    UPDATE request_attachments
+                    SET original_filename = %s, storage_id = %s, file_size = %s,
+                        uploaded_by = %s, uploaded_at = now()
+                    WHERE request_id = %s
+                    RETURNING id, request_id, original_filename, storage_id, file_size, uploaded_by, uploaded_at
+                    """,
+                    (filename, new_storage_id, len(content), context.user["id"], request_id),
+                ).fetchone()
+            _record_attachment_event(
+                connection,
+                request_id,
+                context.user["id"],
+                event_type,
+                request_row["status"],
+                filename,
+            )
+    except HTTPException:
+        _remove_path(new_path)
+        raise
+    except Exception as error:
+        _remove_path(new_path)
+        raise HTTPException(status_code=500, detail="Could not save the quotation attachment.") from error
+
+    if previous_storage_id is not None:
+        _remove_attachment_file(previous_storage_id)
+    return _serialize_attachment(attachment) or {}
+
+
+@router.get("/requests/{request_id}/attachment")
+def get_quotation_attachment(
+    request_id: int,
+    download: bool = Query(default=False),
+    context: AuthContext = Depends(get_auth_context),
+) -> Response:
+    with connect() as connection:
+        request_row = connection.execute(
+            "SELECT requester_id FROM purchase_requests WHERE id = %s FOR SHARE",
+            (request_id,),
+        ).fetchone()
+        if request_row is None or (
+            context.user["role"] != "admin" and request_row["requester_id"] != context.user["id"]
+        ):
+            raise HTTPException(status_code=404, detail="Purchase request not found.")
+
+        attachment = _get_quotation_attachment(connection, request_id)
+        if attachment is None:
+            raise HTTPException(status_code=404, detail="Quotation attachment not found.")
+        if re.fullmatch(r"[0-9a-f]{64}", attachment["storage_id"]) is None:
+            raise HTTPException(status_code=500, detail="Quotation attachment could not be read.")
+
+        path = get_attachment_storage_dir() / f"{attachment['storage_id']}.pdf"
+        try:
+            with path.open("rb") as stored_file:
+                content = stored_file.read(MAX_ATTACHMENT_BYTES + 1)
+        except OSError as error:
+            raise HTTPException(status_code=404, detail="Quotation attachment is unavailable.") from error
+        if len(content) > MAX_ATTACHMENT_BYTES or len(content) != attachment["file_size"]:
+            raise HTTPException(status_code=500, detail="Quotation attachment could not be read.")
+
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": _content_disposition(attachment["original_filename"], download),
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.delete("/requests/{request_id}/attachment")
+def delete_quotation_attachment(
+    request_id: int,
+    context: AuthContext = Depends(require_requester_with_csrf),
+) -> dict:
+    storage_id: str | None = None
+    with connect() as connection:
+        request_row = _lock_editable_request(connection, request_id, context.user["id"])
+        attachment = _get_quotation_attachment(connection, request_id)
+        if attachment is None:
+            raise HTTPException(status_code=404, detail="Quotation attachment not found.")
+
+        storage_id = attachment["storage_id"]
+        connection.execute("DELETE FROM request_attachments WHERE request_id = %s", (request_id,))
+        _record_attachment_event(
+            connection,
+            request_id,
+            context.user["id"],
+            "AttachmentDeleted",
+            request_row["status"],
+            attachment["original_filename"],
+        )
+
+    if storage_id is not None:
+        _remove_attachment_file(storage_id)
+    return {"deleted": True}
 
 
 @router.put("/requests/{request_id}")

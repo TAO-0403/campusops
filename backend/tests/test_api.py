@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
+import pytest
 
+from app import purchasing
+from app.config import get_attachment_storage_dir
 from app.db import connect
 from app.main import app
 from app.seed_demo_requests import SHOWCASE_STATUSES, TITLES, _sample_event_timestamps
@@ -568,3 +571,311 @@ def test_csv_export_empty_result_special_characters_and_formula_safety() -> None
         "Amount (USD)", "Status", "Created At", "Updated At",
     ]
     assert list(empty_reader) == []
+
+
+def _minimal_pdf(marker: bytes = b"") -> bytes:
+    chunks = [b"%PDF-1.4\n", marker]
+    object_bodies = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [] /Count 0 >>",
+    ]
+    offsets = [0]
+    for index, body in enumerate(object_bodies, start=1):
+        offsets.append(sum(len(chunk) for chunk in chunks))
+        chunks.append(f"{index} 0 obj\n".encode() + body + b"\nendobj\n")
+    xref_offset = sum(len(chunk) for chunk in chunks)
+    chunks.append(b"xref\n0 3\n0000000000 65535 f \n")
+    chunks.extend(f"{offset:010d} 00000 n \n".encode() for offset in offsets[1:])
+    chunks.append(
+        b"trailer\n<< /Size 3 /Root 1 0 R >>\nstartxref\n"
+        + str(xref_offset).encode()
+        + b"\n%%EOF\n"
+    )
+    return b"".join(chunks)
+
+
+def _minimal_pdf_with_size(target_size: int) -> bytes:
+    marker = b""
+    for _ in range(5):
+        content = _minimal_pdf(marker)
+        difference = target_size - len(content)
+        if difference == 0:
+            return content
+        marker = b"%" + b"x" * max(0, len(marker) + difference - 2) + b"\n"
+    raise AssertionError("Could not create a PDF at the requested byte size.")
+
+
+def _upload_attachment(
+    client: TestClient,
+    request_id: int,
+    filename: str,
+    content: bytes | None = None,
+    csrf_token: str | None = None,
+    content_type: str = "application/pdf",
+):
+    headers = {"X-CSRF-Token": csrf_token} if csrf_token is not None else {}
+    body = _minimal_pdf() if content is None else content
+    return client.post(
+        f"/api/requests/{request_id}/attachment",
+        files={"file": (filename, body, content_type)},
+        headers=headers,
+    )
+
+
+def _create_draft_for(client: TestClient, csrf: str, **overrides: object) -> dict:
+    return create_request(client, csrf, **overrides)
+
+
+def test_quotation_attachment_upload_view_download_delete_and_history() -> None:
+    pdf = _minimal_pdf()
+    filename = "Vendor quote 报价 2026.pdf"
+    with TestClient(app) as alex:
+        csrf = sign_in(alex, APPLICANT_A, APPLICANT_A_PASSWORD)
+        request = _create_draft_for(alex, csrf, title="Quotation lifecycle")
+        assert alex.get(f"/api/requests/{request['id']}").json()["attachment"] is None
+
+        uploaded = _upload_attachment(alex, request["id"], filename, pdf, csrf, content_type="text/plain")
+        assert uploaded.status_code == 200
+        assert uploaded.json()["original_filename"] == filename
+        assert uploaded.json()["file_size"] == len(pdf)
+        assert set(uploaded.json()) == {"original_filename", "file_size", "uploaded_at"}
+
+        detail = alex.get(f"/api/requests/{request['id']}").json()
+        assert detail["attachment"]["original_filename"] == filename
+        assert detail["attachment"]["file_size"] == len(pdf)
+        viewed = alex.get(f"/api/requests/{request['id']}/attachment")
+        downloaded = alex.get(f"/api/requests/{request['id']}/attachment?download=true")
+        assert viewed.status_code == downloaded.status_code == 200
+        assert viewed.content == downloaded.content == pdf
+        assert viewed.headers["content-type"] == "application/pdf"
+        assert viewed.headers["cache-control"] == "private, no-store"
+        assert viewed.headers["content-disposition"].startswith("inline;")
+        assert "filename*=UTF-8''Vendor%20quote%20%E6%8A%A5%E4%BB%B7%202026.pdf" in downloaded.headers["content-disposition"]
+        assert downloaded.headers["content-disposition"].startswith("attachment;")
+
+        deleted = alex.delete(f"/api/requests/{request['id']}/attachment", headers={"X-CSRF-Token": csrf})
+        assert deleted.status_code == 200
+        assert alex.get(f"/api/requests/{request['id']}/attachment").status_code == 404
+        final_detail = alex.get(f"/api/requests/{request['id']}").json()
+        assert final_detail["attachment"] is None
+        assert [event["event_type"] for event in final_detail["events"] if event["event_type"].startswith("Attachment")] == [
+            "AttachmentUploaded", "AttachmentDeleted",
+        ]
+        attachment_events = [event for event in final_detail["events"] if event["event_type"].startswith("Attachment")]
+        assert all(event["actor_name"] == "Alex Morgan" and event["created_at"] for event in attachment_events)
+        assert [event["details"]["filename"] for event in attachment_events] == [filename, filename]
+        assert not list(get_attachment_storage_dir().glob("*.pdf"))
+
+
+def test_quotation_attachment_replacement_updates_metadata_and_removes_old_file() -> None:
+    first_pdf = _minimal_pdf()
+    second_pdf = _minimal_pdf(b"% replacement\n")
+    with TestClient(app) as alex:
+        csrf = sign_in(alex, APPLICANT_A, APPLICANT_A_PASSWORD)
+        request = _create_draft_for(alex, csrf, title="Quotation replacement")
+        assert _upload_attachment(alex, request["id"], "First quote.pdf", first_pdf, csrf).status_code == 200
+        with connect() as connection:
+            old_storage_id = connection.execute(
+                "SELECT storage_id FROM request_attachments WHERE request_id = %s", (request["id"],)
+            ).fetchone()["storage_id"]
+
+        replaced = _upload_attachment(alex, request["id"], "Updated quote.pdf", second_pdf, csrf)
+        assert replaced.status_code == 200
+        assert replaced.json()["original_filename"] == "Updated quote.pdf"
+        assert replaced.json()["file_size"] == len(second_pdf)
+        with connect() as connection:
+            attachments = connection.execute(
+                "SELECT storage_id, original_filename, file_size FROM request_attachments WHERE request_id = %s",
+                (request["id"],),
+            ).fetchall()
+            events = connection.execute(
+                "SELECT event_type FROM request_events WHERE request_id = %s AND event_type LIKE %s ORDER BY id",
+                (request["id"], "Attachment%"),
+            ).fetchall()
+
+        assert len(attachments) == 1
+        assert attachments[0]["storage_id"] != old_storage_id
+        assert attachments[0]["original_filename"] == "Updated quote.pdf"
+        assert attachments[0]["file_size"] == len(second_pdf)
+        assert [event["event_type"] for event in events] == ["AttachmentUploaded", "AttachmentReplaced"]
+        assert not (get_attachment_storage_dir() / f"{old_storage_id}.pdf").exists()
+        assert alex.get(f"/api/requests/{request['id']}/attachment").content == second_pdf
+        assert len(list(get_attachment_storage_dir().glob("*.pdf"))) == 1
+
+
+def test_quotation_attachment_read_write_permissions_and_csrf() -> None:
+    pdf = _minimal_pdf()
+    with TestClient(app) as alex:
+        alex_csrf = sign_in(alex, APPLICANT_A, APPLICANT_A_PASSWORD)
+        request = _create_draft_for(alex, alex_csrf, title="Private quotation")
+        assert _upload_attachment(alex, request["id"], "Private.pdf", pdf, alex_csrf).status_code == 200
+
+        assert _upload_attachment(alex, request["id"], "No csrf.pdf", pdf).status_code == 403
+        assert alex.delete(f"/api/requests/{request['id']}/attachment").status_code == 403
+
+    with TestClient(app) as anonymous:
+        assert anonymous.get(f"/api/requests/{request['id']}/attachment").status_code == 401
+        assert anonymous.get(f"/api/requests/{request['id']}/attachment?download=true").status_code == 401
+
+    with TestClient(app) as jordan:
+        jordan_csrf = sign_in(jordan, APPLICANT_B, APPLICANT_B_PASSWORD)
+        assert jordan.get(f"/api/requests/{request['id']}/attachment").status_code == 404
+        assert _upload_attachment(jordan, request["id"], "Other.pdf", pdf, jordan_csrf).status_code == 404
+        assert jordan.delete(f"/api/requests/{request['id']}/attachment", headers={"X-CSRF-Token": jordan_csrf}).status_code == 404
+
+    with TestClient(app) as admin:
+        admin_csrf = sign_in(admin, ADMIN, ADMIN_PASSWORD)
+        assert admin.get(f"/api/requests/{request['id']}/attachment").content == pdf
+        assert admin.get(f"/api/requests/{request['id']}/attachment?download=true").headers["content-disposition"].startswith("attachment;")
+        assert _upload_attachment(admin, request["id"], "Admin.pdf", pdf, admin_csrf).status_code == 403
+        assert admin.delete(f"/api/requests/{request['id']}/attachment", headers={"X-CSRF-Token": admin_csrf}).status_code == 403
+
+    with TestClient(app) as alex:
+        sign_in(alex, APPLICANT_A, APPLICANT_A_PASSWORD)
+        assert alex.get(f"/api/requests/{request['id']}/attachment").content == pdf
+
+
+def test_quotation_attachment_cannot_change_after_submission_or_approval() -> None:
+    pdf = _minimal_pdf()
+    with TestClient(app) as alex:
+        csrf = sign_in(alex, APPLICANT_A, APPLICANT_A_PASSWORD)
+        request = create_request(
+            alex,
+            csrf,
+            title="Locked quotation",
+            description="Request details for review.",
+            vendor="Example vendor",
+            amount="25.00",
+        )
+        assert _upload_attachment(alex, request["id"], "Original.pdf", pdf, csrf).status_code == 200
+        assert alex.post(f"/api/requests/{request['id']}/submit", headers={"X-CSRF-Token": csrf}).status_code == 200
+        assert _upload_attachment(alex, request["id"], "Changed.pdf", pdf, csrf).status_code == 409
+        assert alex.delete(f"/api/requests/{request['id']}/attachment", headers={"X-CSRF-Token": csrf}).status_code == 409
+
+    with TestClient(app) as admin:
+        admin_csrf = sign_in(admin, ADMIN, ADMIN_PASSWORD)
+        assert admin.post(f"/api/requests/{request['id']}/approve", json={}, headers={"X-CSRF-Token": admin_csrf}).status_code == 200
+
+    with TestClient(app) as alex:
+        csrf = sign_in(alex, APPLICANT_A, APPLICANT_A_PASSWORD)
+        assert _upload_attachment(alex, request["id"], "Changed after approval.pdf", pdf, csrf).status_code == 409
+        assert alex.delete(f"/api/requests/{request['id']}/attachment", headers={"X-CSRF-Token": csrf}).status_code == 409
+        assert alex.get(f"/api/requests/{request['id']}/attachment").content == pdf
+
+
+def test_quotation_attachment_can_be_changed_after_return() -> None:
+    pdf = _minimal_pdf()
+    revised_pdf = _minimal_pdf(b"% revised quote\n")
+    with TestClient(app) as alex:
+        csrf = sign_in(alex, APPLICANT_A, APPLICANT_A_PASSWORD)
+        request = create_request(
+            alex,
+            csrf,
+            title="Returned quotation",
+            description="Details for review.",
+            vendor="Example vendor",
+            amount="25.00",
+        )
+        assert _upload_attachment(alex, request["id"], "Original.pdf", pdf, csrf).status_code == 200
+        assert alex.post(f"/api/requests/{request['id']}/submit", headers={"X-CSRF-Token": csrf}).status_code == 200
+
+    with TestClient(app) as admin:
+        csrf = sign_in(admin, ADMIN, ADMIN_PASSWORD)
+        returned = admin.post(
+            f"/api/requests/{request['id']}/return",
+            json={"reason": "Please provide an updated quotation."},
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert returned.status_code == 200
+
+    with TestClient(app) as alex:
+        csrf = sign_in(alex, APPLICANT_A, APPLICANT_A_PASSWORD)
+        replaced = _upload_attachment(alex, request["id"], "Revised.pdf", revised_pdf, csrf)
+        assert replaced.status_code == 200
+        assert replaced.json()["original_filename"] == "Revised.pdf"
+        assert alex.get(f"/api/requests/{request['id']}/attachment").content == revised_pdf
+        assert alex.delete(f"/api/requests/{request['id']}/attachment", headers={"X-CSRF-Token": csrf}).status_code == 200
+
+
+def test_quotation_attachment_rejects_invalid_and_oversized_files() -> None:
+    with TestClient(app) as alex:
+        csrf = sign_in(alex, APPLICANT_A, APPLICANT_A_PASSWORD)
+        request = _create_draft_for(alex, csrf, title="File validation")
+        max_size_pdf = _minimal_pdf_with_size(5 * 1024 * 1024)
+        assert len(max_size_pdf) == 5 * 1024 * 1024
+        max_upload = _upload_attachment(alex, request["id"], "maximum-size.pdf", max_size_pdf, csrf)
+        assert max_upload.status_code == 200
+        assert max_upload.json()["file_size"] == 5 * 1024 * 1024
+        assert alex.delete(f"/api/requests/{request['id']}/attachment", headers={"X-CSRF-Token": csrf}).status_code == 200
+        assert _upload_attachment(alex, request["id"], "empty.pdf", b"", csrf).status_code == 422
+        assert _upload_attachment(alex, request["id"], "text.pdf", b"plain text, not a PDF", csrf).status_code == 422
+        assert _upload_attachment(alex, request["id"], "disguised.pdf", b"%PDF-1.4\nnot a PDF structure\n%%EOF\n", csrf).status_code == 422
+        assert _upload_attachment(alex, request["id"], "not-a-pdf.txt", _minimal_pdf(), csrf).status_code == 415
+        assert _upload_attachment(alex, request["id"], "too-large.pdf", b"%PDF-1.4\n" + b"x" * (5 * 1024 * 1024), csrf).status_code == 413
+        assert alex.get(f"/api/requests/{request['id']}").json()["attachment"] is None
+        assert not get_attachment_storage_dir().exists() or not list(get_attachment_storage_dir().iterdir())
+    assert purchasing._validate_attachment_filename(r"C:\private folder\报价 2026.pdf") == "报价 2026.pdf"
+
+
+def test_quotation_attachment_failures_clean_files_and_preserve_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
+    pdf = _minimal_pdf()
+
+    def fail_event(*args, **kwargs):
+        raise RuntimeError("database write failed")
+
+    def fail_storage(*args, **kwargs):
+        raise OSError("disk write failed")
+
+    with TestClient(app) as alex:
+        csrf = sign_in(alex, APPLICANT_A, APPLICANT_A_PASSWORD)
+        request = _create_draft_for(alex, csrf, title="Attachment failure handling")
+        with monkeypatch.context() as patcher:
+            patcher.setattr(
+                purchasing.tempfile,
+                "NamedTemporaryFile",
+                fail_storage,
+            )
+            with TestClient(app, raise_server_exceptions=False) as failure_client:
+                failure_csrf = sign_in(failure_client, APPLICANT_A, APPLICANT_A_PASSWORD)
+                failed_storage = _upload_attachment(failure_client, request["id"], "Disk failure.pdf", pdf, failure_csrf)
+        assert failed_storage.status_code == 500
+        assert alex.get(f"/api/requests/{request['id']}").json()["attachment"] is None
+        assert not get_attachment_storage_dir().exists() or not list(get_attachment_storage_dir().iterdir())
+
+        with monkeypatch.context() as patcher:
+            patcher.setattr(purchasing, "_record_attachment_event", fail_event)
+            with TestClient(app, raise_server_exceptions=False) as failure_client:
+                failure_csrf = sign_in(failure_client, APPLICANT_A, APPLICANT_A_PASSWORD)
+                failed_upload = _upload_attachment(failure_client, request["id"], "Never saved.pdf", pdf, failure_csrf)
+        assert failed_upload.status_code == 500
+        assert alex.get(f"/api/requests/{request['id']}").json()["attachment"] is None
+        assert not get_attachment_storage_dir().exists() or not list(get_attachment_storage_dir().iterdir())
+
+        uploaded = _upload_attachment(alex, request["id"], "Keep this.pdf", pdf, csrf)
+        assert uploaded.status_code == 200
+        with connect() as connection:
+            old_attachment = connection.execute(
+                "SELECT storage_id, original_filename FROM request_attachments WHERE request_id = %s",
+                (request["id"],),
+            ).fetchone()
+
+        with monkeypatch.context() as patcher:
+            patcher.setattr(purchasing, "_record_attachment_event", fail_event)
+            with TestClient(app, raise_server_exceptions=False) as failure_client:
+                failure_csrf = sign_in(failure_client, APPLICANT_A, APPLICANT_A_PASSWORD)
+                failed_replacement = _upload_attachment(
+                    failure_client,
+                    request["id"],
+                    "Must not replace.pdf",
+                    _minimal_pdf(b"% next version\n"),
+                    failure_csrf,
+                )
+        assert failed_replacement.status_code == 500
+        with connect() as connection:
+            current_attachment = connection.execute(
+                "SELECT storage_id, original_filename FROM request_attachments WHERE request_id = %s",
+                (request["id"],),
+            ).fetchone()
+        assert current_attachment == old_attachment
+        assert (get_attachment_storage_dir() / f"{old_attachment['storage_id']}.pdf").read_bytes() == pdf
+        assert len(list(get_attachment_storage_dir().glob("*.pdf"))) == 1

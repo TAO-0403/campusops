@@ -11,5 +11,6 @@ __pycache__/
 node_modules/
 dist/
 coverage/
+/data/attachments/
 .DS_Store
 Thumbs.db

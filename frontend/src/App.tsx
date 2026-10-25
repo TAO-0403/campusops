@@ -336,6 +336,8 @@ function RequestDetailPage({ user, requestId, navigate, onSignOut }: { user: Use
   const [approvalComment, setApprovalComment] = useState('')
   const [returnReason, setReturnReason] = useState('')
   const [resubmitComment, setResubmitComment] = useState('')
+  const [attachmentProcessing, setAttachmentProcessing] = useState(false)
+  const [attachmentError, setAttachmentError] = useState('')
   const loadRequest = useCallback(async () => {
     setLoading(true); setError('')
     try { setRequest(await api.getRequest(requestId)) }
@@ -360,6 +362,32 @@ function RequestDetailPage({ user, requestId, navigate, onSignOut }: { user: Use
     if (!window.confirm('Resubmit this purchase request for review? You will not be able to edit it afterwards.')) return
     void perform(() => api.resubmitRequest(requestId, resubmitComment), 'Purchase request resubmitted successfully.')
   }
+  const uploadAttachment = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    setAttachmentProcessing(true); setAttachmentError('')
+    try {
+      await api.uploadAttachment(requestId, file)
+      setRequest(await api.getRequest(requestId))
+    } catch (failure) {
+      setAttachmentError(failure instanceof Error ? failure.message : 'Could not upload the quotation. Please try again.')
+    } finally {
+      setAttachmentProcessing(false)
+      event.target.value = ''
+    }
+  }
+  const deleteAttachment = async () => {
+    if (!request?.attachment || !window.confirm('Delete this quotation attachment?')) return
+    setAttachmentProcessing(true); setAttachmentError('')
+    try {
+      await api.deleteAttachment(requestId)
+      setRequest(await api.getRequest(requestId))
+    } catch (failure) {
+      setAttachmentError(failure instanceof Error ? failure.message : 'Could not delete the quotation. Please try again.')
+    } finally {
+      setAttachmentProcessing(false)
+    }
+  }
 
   return (
     <main className="page-shell app-shell">
@@ -372,8 +400,17 @@ function RequestDetailPage({ user, requestId, navigate, onSignOut }: { user: Use
         {canReview && <section className="review-panel"><div><p className="section-kicker">ADMIN REVIEW</p><h2>Review this request</h2><p className="muted-copy">Choose a decision. A return reason is required.</p></div><div className="review-fields"><label className="review-field"><span>Approval comment (optional)</span><textarea className="text-input text-area" rows={3} maxLength={2000} value={approvalComment} onChange={(event) => setApprovalComment(event.target.value)} /></label><label className="review-field"><span>Return reason (required)</span><textarea className="text-input text-area" rows={3} maxLength={2000} value={returnReason} onChange={(event) => setReturnReason(event.target.value)} /></label></div><div className="review-actions"><button className="button button-secondary" onClick={() => void perform(() => api.returnRequest(requestId, returnReason), 'Request returned to the applicant.')} disabled={processing || !returnReason.trim()}>{processing ? 'Processing…' : 'Return for changes'}</button><button className="button button-primary" onClick={() => void perform(() => api.approveRequest(requestId, approvalComment), 'Purchase request approved.')} disabled={processing}>{processing ? 'Processing…' : 'Approve'}</button></div></section>}
         <div className="detail-grid">
           <section className="table-card detail-card" aria-labelledby="detail-information-title"><div className="table-heading"><div><p className="section-kicker">REQUEST INFORMATION</p><h2 id="detail-information-title">Purchase details</h2></div></div><dl className="detail-list"><div><dt>Vendor</dt><dd>{request.vendor || 'Not set'}</dd></div><div><dt>Department</dt><dd>{request.department_name ?? 'Not set'}</dd></div><div><dt>Estimated amount</dt><dd className="amount-cell">{formatMoney(request.amount)}</dd></div><div><dt>Applicant</dt><dd>{request.requester_name}</dd></div><div><dt>Created</dt><dd>{formatDate(request.created_at)}</dd></div><div className="detail-description"><dt>Purpose and description</dt><dd>{request.description || 'No description provided.'}</dd></div></dl></section>
-          <section className="table-card history-card" aria-labelledby="history-title"><div className="table-heading"><div><p className="section-kicker">AUDIT TRAIL</p><h2 id="history-title">Activity history</h2></div></div>{request.events.length === 0 ? <p className="muted-copy">No activity recorded yet.</p> : <ol className="timeline">{request.events.map((event) => <li className="timeline-item" key={event.id}><span className={`timeline-dot ${['Submitted', 'Resubmitted', 'Approved'].includes(event.event_type) ? 'timeline-dot-active' : ''}`} aria-hidden="true" /><div><strong>{event.event_type === 'Submitted' ? 'Request submitted' : event.event_type === 'Resubmitted' ? 'Request resubmitted' : event.event_type === 'Approved' ? 'Request approved' : event.event_type === 'Returned' ? 'Request returned' : event.event_type === 'Created' ? 'Draft created' : 'Request updated'}</strong><p>{event.actor_name} · {formatDate(event.created_at)} · {event.previous_status ?? 'New'} → {event.new_status}</p>{event.comment && <p className="event-comment">{event.comment}</p>}</div></li>)}</ol>}</section>
+          <section className="table-card history-card" aria-labelledby="history-title"><div className="table-heading"><div><p className="section-kicker">AUDIT TRAIL</p><h2 id="history-title">Activity history</h2></div></div>{request.events.length === 0 ? <p className="muted-copy">No activity recorded yet.</p> : <ol className="timeline">{request.events.map((event) => <li className="timeline-item" key={event.id}><span className={`timeline-dot ${['Submitted', 'Resubmitted', 'Approved'].includes(event.event_type) ? 'timeline-dot-active' : ''}`} aria-hidden="true" /><div><strong>{event.event_type === 'Submitted' ? 'Request submitted' : event.event_type === 'Resubmitted' ? 'Request resubmitted' : event.event_type === 'Approved' ? 'Request approved' : event.event_type === 'Returned' ? 'Request returned' : event.event_type === 'Created' ? 'Draft created' : event.event_type === 'AttachmentUploaded' ? 'Quotation uploaded' : event.event_type === 'AttachmentReplaced' ? 'Quotation replaced' : event.event_type === 'AttachmentDeleted' ? 'Quotation deleted' : 'Request updated'}</strong><p>{event.actor_name} · {formatDate(event.created_at)} · {event.previous_status ?? 'New'} → {event.new_status}</p>{event.comment && <p className="event-comment">{event.comment}</p>}</div></li>)}</ol>}</section>
         </div>
+        <section className="table-card attachment-card" aria-labelledby="quotation-title">
+          <div className="table-heading"><div><p className="section-kicker">QUOTATION ATTACHMENT</p><h2 id="quotation-title">PDF quotation</h2></div></div>
+          <div className="attachment-content">
+            {request.attachment ? <div className="attachment-file"><div><strong>{request.attachment.original_filename}</strong><span>{formatFileSize(request.attachment.file_size)} · Uploaded {formatDate(request.attachment.uploaded_at)}</span></div><div className="attachment-links"><a className="button button-secondary" href={api.quotationAttachmentUrl(requestId)} target="_blank" rel="noreferrer">View PDF</a><a className="button button-secondary" href={api.quotationAttachmentUrl(requestId, true)}>Download</a></div></div> : <p className="attachment-empty">No quotation has been attached.</p>}
+            {canEdit && <div className="attachment-controls"><label className="attachment-upload"><span>{request.attachment ? 'Replace quotation' : 'Upload quotation'}</span><input type="file" accept=".pdf,application/pdf" onChange={(event) => void uploadAttachment(event)} disabled={processing || attachmentProcessing} /></label>{request.attachment && <button className="button button-secondary" type="button" onClick={() => void deleteAttachment()} disabled={processing || attachmentProcessing}>{attachmentProcessing ? 'Updating…' : 'Delete attachment'}</button>}<span className="attachment-hint">PDF only · Max 5 MB</span></div>}
+            {attachmentError && <p className="notice notice-error attachment-error" role="alert">{attachmentError}</p>}
+            {attachmentProcessing && <p className="attachment-progress" role="status">Saving quotation attachment…</p>}
+          </div>
+        </section>
       </> : null}
       <footer className="footer"><span>CampusOps</span><span>Request history is saved with each status change.</span></footer>
     </main>
@@ -384,5 +421,6 @@ function StatusBadge({ status }: { status: RequestStatus }) { return <span class
 function PageMessage({ message }: { message: string }) { return <main className="page-shell loading-screen"><span className="brand-mark" aria-hidden="true">C</span><p>{message}</p></main> }
 function formatMoney(amount: string) { const value = Number(amount); return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number.isFinite(value) ? value : 0) }
 function formatDate(value: string) { return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) }
+function formatFileSize(bytes: number) { return bytes < 1024 * 1024 ? `${bytes.toLocaleString('en-US')} bytes` : `${(bytes / (1024 * 1024)).toFixed(2)} MB` }
 
 export default App

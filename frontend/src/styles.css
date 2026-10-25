@@ -162,6 +162,21 @@ h1 { margin-bottom: 18px; color: #1e3447; font-size: clamp(38px, 5.2vw, 58px); f
 .detail-list dd { margin: 0; color: #344a5a; font-size: 12px; font-weight: 600; line-height: 1.65; overflow-wrap: anywhere; }
 .detail-list .detail-description { grid-column: 1 / -1; }
 .detail-list .detail-description dd { max-width: 750px; color: #657681; font-weight: 400; white-space: pre-wrap; }
+.attachment-card { margin-top: 16px; }
+.attachment-content { padding: 0 25px 24px; }
+.attachment-file { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 15px; border: 1px solid #edf0f2; border-radius: 10px; background: #fcfdfd; }
+.attachment-file > div:first-child { display: grid; gap: 6px; min-width: 0; }
+.attachment-file strong { color: #344a5a; font-size: 12px; overflow-wrap: anywhere; }
+.attachment-file span, .attachment-hint, .attachment-progress { color: #85929a; font-size: 11px; }
+.attachment-links, .attachment-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.attachment-links .button { min-height: 36px; }
+.attachment-empty { margin: 0; color: #788892; font-size: 12px; }
+.attachment-controls { margin-top: 16px; }
+.attachment-upload { display: grid; gap: 6px; color: #465b6b; font-size: 11px; font-weight: 700; }
+.attachment-upload input { max-width: 290px; color: #71808d; font-size: 11px; font-weight: 400; }
+.attachment-hint { margin-left: 3px; }
+.attachment-error, .attachment-progress { margin: 13px 0 0; }
+.attachment-progress { color: #397095; }
 .timeline { margin: 0; padding: 0 25px 24px; list-style: none; }
 .timeline-item { position: relative; display: flex; gap: 12px; min-height: 56px; }
 .timeline-item:not(:last-child)::after { position: absolute; top: 13px; bottom: -2px; left: 4px; width: 1px; background: #e6ebed; content: ''; }
@@ -271,6 +286,8 @@ h1 { margin-bottom: 18px; color: #1e3447; font-size: clamp(38px, 5.2vw, 58px); f
   .review-actions .button { width: 100%; }
   .detail-list { grid-template-columns: 1fr; padding-right: 20px; padding-left: 20px; }
   .detail-list .detail-description { grid-column: auto; }
+  .attachment-content { padding-right: 20px; padding-left: 20px; }
+  .attachment-file { align-items: flex-start; flex-direction: column; }
   .overview-heading { align-items: flex-start; flex-direction: column; }
   .metric-grid, .chart-grid { grid-template-columns: 1fr; }
   .metric-card { padding: 16px; }

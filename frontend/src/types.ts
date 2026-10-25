@@ -29,9 +29,15 @@ export type PurchaseRequest = {
   updated_at: string
 }
 
+export type QuotationAttachment = {
+  original_filename: string
+  file_size: number
+  uploaded_at: string
+}
+
 export type RequestEvent = {
   id: number
-  event_type: 'Created' | 'Updated' | 'Submitted' | 'Returned' | 'Resubmitted' | 'Approved'
+  event_type: 'Created' | 'Updated' | 'Submitted' | 'Returned' | 'Resubmitted' | 'Approved' | 'AttachmentUploaded' | 'AttachmentReplaced' | 'AttachmentDeleted'
   previous_status: RequestStatus | null
   new_status: RequestStatus
   details: Record<string, unknown>
@@ -40,7 +46,7 @@ export type RequestEvent = {
   actor_name: string
 }
 
-export type RequestDetail = PurchaseRequest & { events: RequestEvent[] }
+export type RequestDetail = PurchaseRequest & { events: RequestEvent[]; attachment: QuotationAttachment | null }
 export type RequestDraft = { title: string; description: string; vendor: string; department_id: number | null; amount: string }
 export type RequestFilters = { search: string; status: RequestStatus | ''; department_id: number | ''; sort_by: 'created_at' | 'amount'; sort_order: 'asc' | 'desc'; page: number; page_size: 10 | 20 }
 export type RequestPage = { items: PurchaseRequest[]; total: number; page: number; page_size: number }

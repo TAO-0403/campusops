@@ -19,7 +19,7 @@ def _require_test_database(database_name: str) -> None:
 
 
 @pytest.fixture(autouse=True)
-def isolated_test_database(monkeypatch: pytest.MonkeyPatch) -> None:
+def isolated_test_database(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     development_database = get_database_settings()["dbname"]
     test_database = os.getenv("CAMPUSOPS_TEST_DATABASE", "campusops_test")
 
@@ -28,6 +28,7 @@ def isolated_test_database(monkeypatch: pytest.MonkeyPatch) -> None:
 
     _require_test_database(test_database)
     monkeypatch.setenv("PGDATABASE", test_database)
+    monkeypatch.setenv("CAMPUSOPS_ATTACHMENT_DIR", str(tmp_path / "attachments"))
     apply_migrations(test_database)
 
     with connect(test_database) as connection:
