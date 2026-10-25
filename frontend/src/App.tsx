@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ApiError, api } from './api'
-import type { Department, PurchaseRequest, RequestDetail, RequestDraft, RequestFilters, RequestOverview, RequestStatus, User } from './types'
+import type { Department, PurchaseRequest, QuotationAttachment, RequestDetail, RequestDraft, RequestFilters, RequestOverview, RequestStatus, User } from './types'
 
 type Navigate = (path: string) => void
 
@@ -273,8 +273,12 @@ function RequestFormPage({ user, navigate, onSignOut, requestId }: { user: User;
   const [draft, setDraft] = useState<RequestDraft>({ ...EMPTY_DRAFT, department_id: user.department_id })
   const [departments, setDepartments] = useState<Department[]>([])
   const [savedId, setSavedId] = useState<number | null>(requestId ?? null)
+  const [savedAttachment, setSavedAttachment] = useState<QuotationAttachment | null>(null)
+  const [selectedAttachment, setSelectedAttachment] = useState<File | null>(null)
+  const [removeAttachment, setRemoveAttachment] = useState(false)
   const [loading, setLoading] = useState(Boolean(requestId))
   const [saving, setSaving] = useState(false)
+  const [loadError, setLoadError] = useState('')
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [editingStatus, setEditingStatus] = useState<'Draft' | 'Returned'>('Draft')
@@ -285,22 +289,67 @@ function RequestFormPage({ user, navigate, onSignOut, requestId }: { user: User;
         if (!active) return
         setDepartments(rows)
         if (existing) {
-          if (existing.requester_id !== user.id || !['Draft', 'Returned'].includes(existing.status)) setError('Only your own draft or returned requests can be edited.')
-          else { setEditingStatus(existing.status as 'Draft' | 'Returned'); setDraft({ title: existing.title, description: existing.description ?? '', vendor: existing.vendor, department_id: existing.department_id, amount: existing.amount }) }
+          if (existing.requester_id !== user.id || !['Draft', 'Returned'].includes(existing.status)) setLoadError('Only your own draft or returned requests can be edited.')
+          else {
+            setEditingStatus(existing.status as 'Draft' | 'Returned')
+            setDraft({ title: existing.title, description: existing.description ?? '', vendor: existing.vendor, department_id: existing.department_id, amount: existing.amount })
+            setSavedAttachment(existing.attachment)
+          }
         }
       })
-      .catch((failure: unknown) => { if (active) setError(failure instanceof Error ? failure.message : 'Could not load the request form.') })
+      .catch((failure: unknown) => { if (active) setLoadError(failure instanceof Error ? failure.message : 'Could not load the request form.') })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [requestId, user.id])
 
-  const setField = <Key extends keyof RequestDraft>(key: Key, value: RequestDraft[Key]) => { setDraft((current) => ({ ...current, [key]: value })); setSuccess('') }
+  const setField = <Key extends keyof RequestDraft>(key: Key, value: RequestDraft[Key]) => { setDraft((current) => ({ ...current, [key]: value })); setError(''); setSuccess('') }
+  const chooseAttachment = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    setSelectedAttachment(file)
+    setRemoveAttachment(false)
+    setError(''); setSuccess('')
+  }
   const saveDraft = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); setSaving(true); setError(''); setSuccess('')
+    event.preventDefault(); setError(''); setSuccess('')
+    if (selectedAttachment && selectedAttachment.size > 5 * 1024 * 1024) {
+      setError('PDF files must be 5 MB or smaller. Clear the selection or choose a smaller PDF.')
+      return
+    }
+    setSaving(true)
     try {
       const payload = { ...draft, amount: draft.amount || '0.00' }
       const saved = savedId ? await api.updateRequest(savedId, payload) : await api.createRequest(payload)
-      setSavedId(saved.id); setSuccess(editingStatus === 'Returned' ? 'Returned request updated. Resubmit it when ready.' : 'Draft saved successfully.')
+      setSavedId(saved.id)
+
+      if (selectedAttachment) {
+        try {
+          const uploaded = await api.uploadAttachment(saved.id, selectedAttachment)
+          setSavedAttachment(uploaded)
+          setSelectedAttachment(null)
+          setRemoveAttachment(false)
+        } catch (failure) {
+          const reason = failure instanceof Error ? failure.message : 'Please try again.'
+          const partialSave = requestId === undefined && savedId === null
+            ? `Draft was saved, but the quotation could not be uploaded: ${reason} The selected PDF is retained. Save again to retry; the existing draft will be reused.`
+            : `Request details were saved, but the quotation could not be ${savedAttachment ? 'replaced' : 'uploaded'}: ${reason} The selected PDF is retained${savedAttachment ? ', and the existing quotation remains unchanged' : ''}. Save again to retry.`
+          setError(partialSave)
+          return
+        }
+      } else if (removeAttachment && savedAttachment) {
+        try {
+          await api.deleteAttachment(saved.id)
+          setSavedAttachment(null)
+          setRemoveAttachment(false)
+        } catch (failure) {
+          const reason = failure instanceof Error ? failure.message : 'Please try again.'
+          setError(`Request details were saved, but the quotation could not be removed: ${reason} The existing quotation remains available. Save again to retry.`)
+          return
+        }
+      }
+
+      setSuccess(editingStatus === 'Returned' ? 'Returned request updated. Resubmit it when ready.' : 'Draft saved successfully.')
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not save the draft.') }
     finally { setSaving(false) }
   }
@@ -312,7 +361,7 @@ function RequestFormPage({ user, navigate, onSignOut, requestId }: { user: User;
       <section className="page-heading form-page-heading"><div><p className="eyebrow"><span className="eyebrow-dot" /> {savedId ? `${editingStatus.toUpperCase()} REQUEST` : 'NEW REQUEST'}</p><h1 className="page-title">{savedId ? 'Edit purchase request' : 'Start a purchase request'}</h1><p className="hero-copy">{editingStatus === 'Returned' ? 'Save your changes, then resubmit the request for review.' : 'Save a draft at any point. Required details are checked when you submit.'}</p></div></section>
       {loading ? <div className="table-card state-block">Loading request details…</div> : <form className="form-card request-form" onSubmit={saveDraft}>
         <div className="form-section-heading"><h2>Request details</h2><span className="required-note">Required before submission</span></div>
-        {error && <p className="notice notice-error" role="alert">{error}</p>}{success && <p className="notice notice-success" role="status">{success} {savedId && <button type="button" className="inline-link" onClick={() => navigate(`/requests/${savedId}`)}>View request</button>}</p>}
+        {loadError && <p className="notice notice-error" role="alert">{loadError}</p>}{error && <p className="notice notice-error" role="alert">{error}</p>}{success && <p className="notice notice-success" role="status">{success} {savedId && <button type="button" className="inline-link" onClick={() => navigate(`/requests/${savedId}`)}>View request</button>}</p>}
         <div className="form-grid">
           <div className="form-field form-field-wide"><label className="field-label" htmlFor="request-title">Request title</label><input id="request-title" className="text-input" maxLength={160} value={draft.title} onChange={(event) => setField('title', event.target.value)} placeholder="For example, Laboratory safety supplies" /></div>
           <div className="form-field"><label className="field-label" htmlFor="vendor">Vendor</label><input id="vendor" className="text-input" maxLength={200} value={draft.vendor} onChange={(event) => setField('vendor', event.target.value)} placeholder="Vendor name" /></div>
@@ -320,7 +369,15 @@ function RequestFormPage({ user, navigate, onSignOut, requestId }: { user: User;
           <div className="form-field"><label className="field-label" htmlFor="amount">Estimated amount (USD)</label><div className="amount-input-wrap"><span aria-hidden="true">$</span><input id="amount" className="text-input" type="number" min="0" step="0.01" value={draft.amount} onChange={(event) => setField('amount', event.target.value)} /></div></div>
           <div className="form-field form-field-wide"><label className="field-label" htmlFor="description">Purpose and description</label><textarea id="description" className="text-input text-area" maxLength={5000} rows={5} value={draft.description} onChange={(event) => setField('description', event.target.value)} placeholder="Describe what you need and how it will support campus work." /></div>
         </div>
-        <div className="form-actions"><button className="button button-secondary" type="button" onClick={() => navigate('/workspace')}>Cancel</button><button className="button button-primary" type="submit" disabled={saving || Boolean(error && requestId)}>{saving ? 'Saving…' : editingStatus === 'Returned' ? 'Save changes' : 'Save draft'}</button></div>
+        <section className="form-attachment-section" aria-labelledby="form-quotation-title">
+          <div className="attachment-form-heading"><div><p className="section-kicker">QUOTATION ATTACHMENT</p><h2 id="form-quotation-title">PDF quotation</h2><p className="attachment-hint">Optional · PDF only · Max 5 MB</p></div><label className="attachment-picker"><span className="button button-secondary">{selectedAttachment ? 'Choose another PDF' : savedAttachment && !removeAttachment ? 'Replace PDF' : 'Choose PDF'}</span><input type="file" accept=".pdf,application/pdf" onChange={chooseAttachment} disabled={saving || Boolean(loadError && requestId)} /></label></div>
+          {savedAttachment ? <div className={`attachment-file form-saved-attachment ${removeAttachment ? 'attachment-pending-removal' : ''}`}><div><strong>{savedAttachment.original_filename}</strong><span>{formatFileSize(savedAttachment.file_size)} · Uploaded {formatDate(savedAttachment.uploaded_at)}{removeAttachment ? ' · Will be removed when you save' : ' · Current quotation'}</span></div><div className="attachment-links"><a className="button button-secondary" href={api.quotationAttachmentUrl(savedId ?? requestId ?? 0)} target="_blank" rel="noreferrer">View PDF</a><a className="button button-secondary" href={api.quotationAttachmentUrl(savedId ?? requestId ?? 0, true)}>Download</a></div></div> : !selectedAttachment && <p className="attachment-empty">No quotation has been attached.</p>}
+          {selectedAttachment && <div className="attachment-file attachment-staged-file"><div><strong>{selectedAttachment.name}</strong><span>{formatFileSize(selectedAttachment.size)} · Selected for this save{savedAttachment ? ' · Will replace the current quotation' : ''}</span></div><button className="text-button" type="button" onClick={() => { setSelectedAttachment(null); setError(''); setSuccess('') }} disabled={saving}>Clear selection</button></div>}
+          {savedAttachment && !selectedAttachment && !removeAttachment && <button className="text-button attachment-remove-action" type="button" onClick={() => { setRemoveAttachment(true); setError(''); setSuccess('') }} disabled={saving}>Remove current quotation on save</button>}
+          {removeAttachment && <button className="text-button attachment-remove-action" type="button" onClick={() => { setRemoveAttachment(false); setError(''); setSuccess('') }} disabled={saving}>Undo removal</button>}
+          {selectedAttachment && selectedAttachment.size > 5 * 1024 * 1024 && <p className="notice notice-error attachment-size-error" role="alert">This file is over the 5 MB limit. Clear the selection or choose a smaller PDF.</p>}
+        </section>
+        <div className="form-actions"><button className="button button-secondary" type="button" onClick={() => navigate('/workspace')} disabled={saving}>Cancel</button><button className="button button-primary" type="submit" disabled={saving || Boolean(loadError && requestId)}>{saving ? 'Saving…' : savedId && requestId ? 'Save changes' : editingStatus === 'Returned' ? 'Save changes' : 'Save draft'}</button></div>
       </form>}
       <footer className="footer"><span>CampusOps</span><span>Drafts remain private to their applicant.</span></footer>
     </main>
@@ -336,8 +393,6 @@ function RequestDetailPage({ user, requestId, navigate, onSignOut }: { user: Use
   const [approvalComment, setApprovalComment] = useState('')
   const [returnReason, setReturnReason] = useState('')
   const [resubmitComment, setResubmitComment] = useState('')
-  const [attachmentProcessing, setAttachmentProcessing] = useState(false)
-  const [attachmentError, setAttachmentError] = useState('')
   const loadRequest = useCallback(async () => {
     setLoading(true); setError('')
     try { setRequest(await api.getRequest(requestId)) }
@@ -362,33 +417,6 @@ function RequestDetailPage({ user, requestId, navigate, onSignOut }: { user: Use
     if (!window.confirm('Resubmit this purchase request for review? You will not be able to edit it afterwards.')) return
     void perform(() => api.resubmitRequest(requestId, resubmitComment), 'Purchase request resubmitted successfully.')
   }
-  const uploadAttachment = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-    setAttachmentProcessing(true); setAttachmentError('')
-    try {
-      await api.uploadAttachment(requestId, file)
-      setRequest(await api.getRequest(requestId))
-    } catch (failure) {
-      setAttachmentError(failure instanceof Error ? failure.message : 'Could not upload the quotation. Please try again.')
-    } finally {
-      setAttachmentProcessing(false)
-      event.target.value = ''
-    }
-  }
-  const deleteAttachment = async () => {
-    if (!request?.attachment || !window.confirm('Delete this quotation attachment?')) return
-    setAttachmentProcessing(true); setAttachmentError('')
-    try {
-      await api.deleteAttachment(requestId)
-      setRequest(await api.getRequest(requestId))
-    } catch (failure) {
-      setAttachmentError(failure instanceof Error ? failure.message : 'Could not delete the quotation. Please try again.')
-    } finally {
-      setAttachmentProcessing(false)
-    }
-  }
-
   return (
     <main className="page-shell app-shell">
       <TopBar navigate={navigate} user={user} onSignOut={onSignOut} />
@@ -406,9 +434,7 @@ function RequestDetailPage({ user, requestId, navigate, onSignOut }: { user: Use
           <div className="table-heading"><div><p className="section-kicker">QUOTATION ATTACHMENT</p><h2 id="quotation-title">PDF quotation</h2></div></div>
           <div className="attachment-content">
             {request.attachment ? <div className="attachment-file"><div><strong>{request.attachment.original_filename}</strong><span>{formatFileSize(request.attachment.file_size)} · Uploaded {formatDate(request.attachment.uploaded_at)}</span></div><div className="attachment-links"><a className="button button-secondary" href={api.quotationAttachmentUrl(requestId)} target="_blank" rel="noreferrer">View PDF</a><a className="button button-secondary" href={api.quotationAttachmentUrl(requestId, true)}>Download</a></div></div> : <p className="attachment-empty">No quotation has been attached.</p>}
-            {canEdit && <div className="attachment-controls"><label className="attachment-upload"><span>{request.attachment ? 'Replace quotation' : 'Upload quotation'}</span><input type="file" accept=".pdf,application/pdf" onChange={(event) => void uploadAttachment(event)} disabled={processing || attachmentProcessing} /></label>{request.attachment && <button className="button button-secondary" type="button" onClick={() => void deleteAttachment()} disabled={processing || attachmentProcessing}>{attachmentProcessing ? 'Updating…' : 'Delete attachment'}</button>}<span className="attachment-hint">PDF only · Max 5 MB</span></div>}
-            {attachmentError && <p className="notice notice-error attachment-error" role="alert">{attachmentError}</p>}
-            {attachmentProcessing && <p className="attachment-progress" role="status">Saving quotation attachment…</p>}
+            {canEdit && <p className="attachment-manage-hint">Use Edit above to add, replace, or remove the quotation. Changes are saved with the request.</p>}
           </div>
         </section>
       </> : null}

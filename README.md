@@ -122,7 +122,7 @@ The workspace supports title search, status and department filters, creation-tim
 
 ## Quotation attachments
 
-After saving a request as a draft, an applicant can open its details and optionally upload one PDF quotation. The applicant can replace or delete the attachment while the request is Draft or Returned. Attachments are not required to submit a request. Administrators can view and download quotations but cannot change them. Uploads must be valid PDF files no larger than 5 MB.
+Applicants can select an optional PDF quotation in the request form and save it with the draft in one action. When editing a Draft or Returned request, they can stage a replacement or removal and apply it together with the request fields using **Save changes**. **Cancel** discards unsaved attachment changes. A request can be submitted without a quotation. Administrators can view and download quotations but cannot change them. Uploads must be valid PDF files no larger than 5 MB.
 
 Files are stored privately on the local filesystem in `data/attachments` by default. Set `CAMPUSOPS_ATTACHMENT_DIR` to use another local directory. The database stores only attachment metadata and a random storage identifier. The default attachment directory, including temporary upload files, is excluded from Git; if you configure a directory inside the repository, exclude it from Git as well. This local storage is not shared across application servers. Back up the PostgreSQL database and the attachment directory together, and restore both to the same deployment. Losing the local directory makes the corresponding database records unavailable; copying only the database does not back up the PDFs.
 
