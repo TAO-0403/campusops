@@ -114,7 +114,7 @@ The script uses the local `.env` database fields and does not print the database
 
 Applicants can save and edit a draft, then submit it for review. Submitted requests are locked while an administrator reviews them. An administrator can approve a request with an optional comment or return it with a required reason. The applicant can edit a returned request; edits keep it in Returned until the applicant explicitly resubmits it. Every submission, resubmission, return, and approval is recorded with its actor, timestamp, status transition, and comment when provided.
 
-To try the full workflow, sign in as Alex, create and submit a request, then sign out. Sign in as Casey and open the submitted request to approve it or return it with a reason. To complete the return path, sign back in as Alex, edit the returned request, save the changes, and use **Resubmit for review**. Sign in as Casey again to approve the resubmitted request. Activity history appears on the request detail page.
+To try the full workflow, sign in as Alex, create and submit a request, then sign out. Sign in as Casey and open the submitted request to approve it or return it with a reason. To complete the return path, sign back in as Alex, edit the returned request, save the changes, and use **Resubmit for review**. Sign in as Casey again to approve the resubmitted request. The request detail timeline shows draft creation, request edits, submissions, returns, resubmissions, and approvals. Quotation attachment events remain in the database history but are not shown in this timeline.
 
 ## Search and overview
 
@@ -148,7 +148,7 @@ All screenshots show the real application with fictional demonstration data. Cam
 
 ### Approved result and activity history
 
-![An approved request with its complete activity history, including return and resubmission events.](docs/screenshots/08-approved-history.png)
+![An approved request with its request activity timeline, including return and resubmission events.](docs/screenshots/08-approved-history.png)
 
 See the [complete screenshot showcase](docs/showcase.md) for all eight pages in sequence.
 

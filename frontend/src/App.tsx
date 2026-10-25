@@ -4,6 +4,23 @@ import type { Department, PurchaseRequest, QuotationAttachment, RequestDetail, R
 
 type Navigate = (path: string) => void
 
+const REQUEST_HISTORY_LABELS = {
+  Created: 'Draft created',
+  Updated: 'Request updated',
+  Submitted: 'Request submitted',
+  Returned: 'Request returned',
+  Resubmitted: 'Request resubmitted',
+  Approved: 'Request approved',
+} as const
+
+type RequestHistoryEvent = RequestDetail['events'][number] & {
+  event_type: keyof typeof REQUEST_HISTORY_LABELS
+}
+
+function isRequestHistoryEvent(event: RequestDetail['events'][number]): event is RequestHistoryEvent {
+  return Object.prototype.hasOwnProperty.call(REQUEST_HISTORY_LABELS, event.event_type)
+}
+
 function usePathname(): [string, Navigate] {
   const [path, setPath] = useState(window.location.pathname)
   useEffect(() => {
@@ -409,6 +426,7 @@ function RequestDetailPage({ user, requestId, navigate, onSignOut }: { user: Use
   const isOwner = Boolean(request && user.role === 'requester' && request.requester_id === user.id)
   const canEdit = Boolean(isOwner && (request?.status === 'Draft' || request?.status === 'Returned'))
   const canReview = Boolean(user.role === 'admin' && request?.status === 'Submitted')
+  const historyEvents = request?.events.filter(isRequestHistoryEvent) ?? []
   const submit = () => {
     if (!window.confirm('Submit this purchase request for review? You will not be able to edit it afterwards.')) return
     void perform(() => api.submitRequest(requestId), 'Purchase request submitted successfully.')
@@ -427,16 +445,24 @@ function RequestDetailPage({ user, requestId, navigate, onSignOut }: { user: Use
         {request.status === 'Returned' && isOwner && <section className="review-panel"><div><p className="section-kicker">NEXT STEP</p><h2>Update and resubmit</h2><p className="muted-copy">Save edits first. The request stays returned until you resubmit it.</p></div><label className="review-field"><span>Resubmission note (optional)</span><textarea className="text-input text-area" rows={3} maxLength={2000} value={resubmitComment} onChange={(event) => setResubmitComment(event.target.value)} /></label><button className="button button-primary" onClick={resubmit} disabled={processing}>{processing ? 'Resubmitting…' : 'Resubmit for review'}</button></section>}
         {canReview && <section className="review-panel"><div><p className="section-kicker">ADMIN REVIEW</p><h2>Review this request</h2><p className="muted-copy">Choose a decision. A return reason is required.</p></div><div className="review-fields"><label className="review-field"><span>Approval comment (optional)</span><textarea className="text-input text-area" rows={3} maxLength={2000} value={approvalComment} onChange={(event) => setApprovalComment(event.target.value)} /></label><label className="review-field"><span>Return reason (required)</span><textarea className="text-input text-area" rows={3} maxLength={2000} value={returnReason} onChange={(event) => setReturnReason(event.target.value)} /></label></div><div className="review-actions"><button className="button button-secondary" onClick={() => void perform(() => api.returnRequest(requestId, returnReason), 'Request returned to the applicant.')} disabled={processing || !returnReason.trim()}>{processing ? 'Processing…' : 'Return for changes'}</button><button className="button button-primary" onClick={() => void perform(() => api.approveRequest(requestId, approvalComment), 'Purchase request approved.')} disabled={processing}>{processing ? 'Processing…' : 'Approve'}</button></div></section>}
         <div className="detail-grid">
-          <section className="table-card detail-card" aria-labelledby="detail-information-title"><div className="table-heading"><div><p className="section-kicker">REQUEST INFORMATION</p><h2 id="detail-information-title">Purchase details</h2></div></div><dl className="detail-list"><div><dt>Vendor</dt><dd>{request.vendor || 'Not set'}</dd></div><div><dt>Department</dt><dd>{request.department_name ?? 'Not set'}</dd></div><div><dt>Estimated amount</dt><dd className="amount-cell">{formatMoney(request.amount)}</dd></div><div><dt>Applicant</dt><dd>{request.requester_name}</dd></div><div><dt>Created</dt><dd>{formatDate(request.created_at)}</dd></div><div className="detail-description"><dt>Purpose and description</dt><dd>{request.description || 'No description provided.'}</dd></div></dl></section>
-          <section className="table-card history-card" aria-labelledby="history-title"><div className="table-heading"><div><p className="section-kicker">AUDIT TRAIL</p><h2 id="history-title">Activity history</h2></div></div>{request.events.length === 0 ? <p className="muted-copy">No activity recorded yet.</p> : <ol className="timeline">{request.events.map((event) => <li className="timeline-item" key={event.id}><span className={`timeline-dot ${['Submitted', 'Resubmitted', 'Approved'].includes(event.event_type) ? 'timeline-dot-active' : ''}`} aria-hidden="true" /><div><strong>{event.event_type === 'Submitted' ? 'Request submitted' : event.event_type === 'Resubmitted' ? 'Request resubmitted' : event.event_type === 'Approved' ? 'Request approved' : event.event_type === 'Returned' ? 'Request returned' : event.event_type === 'Created' ? 'Draft created' : event.event_type === 'AttachmentUploaded' ? 'Quotation uploaded' : event.event_type === 'AttachmentReplaced' ? 'Quotation replaced' : event.event_type === 'AttachmentDeleted' ? 'Quotation deleted' : 'Request updated'}</strong><p>{event.actor_name} · {formatDate(event.created_at)} · {event.previous_status ?? 'New'} → {event.new_status}</p>{event.comment && <p className="event-comment">{event.comment}</p>}</div></li>)}</ol>}</section>
+          <section className="table-card detail-card" aria-labelledby="detail-information-title">
+            <div className="table-heading"><div><p className="section-kicker">REQUEST INFORMATION</p><h2 id="detail-information-title">Purchase details</h2></div></div>
+            <div className="detail-card-scroll" role="region" aria-label="Purchase details and quotation" tabIndex={0}>
+              <dl className="detail-list"><div><dt>Vendor</dt><dd>{request.vendor || 'Not set'}</dd></div><div><dt>Department</dt><dd>{request.department_name ?? 'Not set'}</dd></div><div><dt>Estimated amount</dt><dd className="amount-cell">{formatMoney(request.amount)}</dd></div><div><dt>Applicant</dt><dd>{request.requester_name}</dd></div><div><dt>Created</dt><dd>{formatDate(request.created_at)}</dd></div><div className="detail-description"><dt>Purpose and description</dt><dd>{request.description || 'No description provided.'}</dd></div></dl>
+              <section className="detail-quotation" aria-labelledby="detail-quotation-title">
+                <div className="detail-quotation-heading"><p className="section-kicker">QUOTATION ATTACHMENT</p><h3 id="detail-quotation-title">PDF quotation</h3></div>
+                {request.attachment ? <div className="attachment-file"><div><strong>{request.attachment.original_filename}</strong><span>{formatFileSize(request.attachment.file_size)} · Uploaded {formatDate(request.attachment.uploaded_at)}</span></div><div className="attachment-links"><a className="button button-secondary" href={api.quotationAttachmentUrl(requestId)} target="_blank" rel="noreferrer">View PDF</a><a className="button button-secondary" href={api.quotationAttachmentUrl(requestId, true)}>Download</a></div></div> : <p className="attachment-empty">No quotation has been attached.</p>}
+                {canEdit && <p className="attachment-manage-hint">Use Edit above to add, replace, or remove the quotation. Changes are saved with the request.</p>}
+              </section>
+            </div>
+          </section>
+          <section className="table-card history-card" aria-labelledby="history-title">
+            <div className="table-heading"><div><p className="section-kicker">AUDIT TRAIL</p><h2 id="history-title">Activity history</h2></div></div>
+            <div className="history-card-scroll" role="region" aria-label="Request activity history" tabIndex={0}>
+              {historyEvents.length === 0 ? <p className="history-empty">No request activity has been recorded yet.</p> : <ol className="timeline">{historyEvents.map((event) => <li className="timeline-item" key={event.id}><span className={`timeline-dot ${['Submitted', 'Resubmitted', 'Approved'].includes(event.event_type) ? 'timeline-dot-active' : ''}`} aria-hidden="true" /><div><strong>{REQUEST_HISTORY_LABELS[event.event_type]}</strong><p>{event.actor_name} · {formatDate(event.created_at)}{event.previous_status !== event.new_status && ` · ${event.previous_status ?? 'New'} → ${event.new_status}`}</p>{event.comment && <p className="event-comment">{event.comment}</p>}</div></li>)}</ol>}
+            </div>
+          </section>
         </div>
-        <section className="table-card attachment-card" aria-labelledby="quotation-title">
-          <div className="table-heading"><div><p className="section-kicker">QUOTATION ATTACHMENT</p><h2 id="quotation-title">PDF quotation</h2></div></div>
-          <div className="attachment-content">
-            {request.attachment ? <div className="attachment-file"><div><strong>{request.attachment.original_filename}</strong><span>{formatFileSize(request.attachment.file_size)} · Uploaded {formatDate(request.attachment.uploaded_at)}</span></div><div className="attachment-links"><a className="button button-secondary" href={api.quotationAttachmentUrl(requestId)} target="_blank" rel="noreferrer">View PDF</a><a className="button button-secondary" href={api.quotationAttachmentUrl(requestId, true)}>Download</a></div></div> : <p className="attachment-empty">No quotation has been attached.</p>}
-            {canEdit && <p className="attachment-manage-hint">Use Edit above to add, replace, or remove the quotation. Changes are saved with the request.</p>}
-          </div>
-        </section>
       </> : null}
       <footer className="footer"><span>CampusOps</span><span>Request history is saved with each status change.</span></footer>
     </main>

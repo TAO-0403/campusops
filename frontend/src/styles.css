@@ -154,16 +154,21 @@ h1 { margin-bottom: 18px; color: #1e3447; font-size: clamp(38px, 5.2vw, 58px); f
 .detail-status, .detail-actions { display: flex; align-items: center; gap: 12px; }
 .detail-status > span:last-child { color: #89969d; font-size: 10px; }
 .detail-actions { flex-shrink: 0; }
-.detail-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(280px, .85fr); align-items: start; gap: 16px; }
-.detail-card, .history-card { min-height: 275px; }
+.detail-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); align-items: stretch; gap: 16px; min-width: 0; }
+.detail-grid > .table-card { display: flex; height: clamp(26rem, 62vh, 34rem); min-height: 0; min-width: 0; box-sizing: border-box; flex-direction: column; overflow: hidden; }
+.detail-grid > .table-card > .table-heading { flex: 0 0 auto; min-width: 0; }
+.detail-card-scroll, .history-card-scroll { min-height: 0; min-width: 0; flex: 1 1 auto; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
+.detail-card-scroll:focus-visible, .history-card-scroll:focus-visible { outline: 2px solid #5c938b; outline-offset: -3px; }
 .detail-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; padding: 0 25px 24px; }
 .detail-list > div { padding: 15px 10px 15px 0; border-top: 1px solid #edf0f2; }
 .detail-list dt { margin-bottom: 7px; color: #8a979e; font-size: 10px; }
 .detail-list dd { margin: 0; color: #344a5a; font-size: 12px; font-weight: 600; line-height: 1.65; overflow-wrap: anywhere; }
 .detail-list .detail-description { grid-column: 1 / -1; }
 .detail-list .detail-description dd { max-width: 750px; color: #657681; font-weight: 400; white-space: pre-wrap; }
-.attachment-card { margin-top: 16px; }
-.attachment-content { padding: 0 25px 24px; }
+.detail-quotation { min-width: 0; margin: 0 25px 24px; padding-top: 18px; border-top: 1px solid #edf0f2; }
+.detail-quotation-heading { margin-bottom: 13px; }
+.detail-quotation-heading .section-kicker { margin-bottom: 5px; }
+.detail-quotation-heading h3 { margin: 0; color: #344a5a; font-size: 14px; }
 .attachment-file { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 15px; border: 1px solid #edf0f2; border-radius: 10px; background: #fcfdfd; }
 .attachment-file > div:first-child { display: grid; gap: 6px; min-width: 0; }
 .attachment-file strong { color: #344a5a; font-size: 12px; overflow-wrap: anywhere; }
@@ -186,11 +191,13 @@ h1 { margin-bottom: 18px; color: #1e3447; font-size: clamp(38px, 5.2vw, 58px); f
 .attachment-remove-action { justify-self: start; color: #a45044; }
 .attachment-size-error { margin: 0; }
 .attachment-manage-hint { margin: 13px 0 0; color: #85929a; font-size: 11px; }
+.history-empty { margin: 0; padding: 0 25px 24px; color: #788892; font-size: 12px; }
 .timeline { margin: 0; padding: 0 25px 24px; list-style: none; }
 .timeline-item { position: relative; display: flex; gap: 12px; min-height: 56px; }
 .timeline-item:not(:last-child)::after { position: absolute; top: 13px; bottom: -2px; left: 4px; width: 1px; background: #e6ebed; content: ''; }
 .timeline-dot { z-index: 1; width: 9px; height: 9px; flex: 0 0 9px; margin-top: 3px; border: 2px solid #8da7ac; border-radius: 50%; background: #fff; }
 .timeline-dot-active { border-color: #4a947b; background: #4a947b; }
+.timeline-item > div { min-width: 0; overflow-wrap: anywhere; }
 .timeline-item strong { color: #415665; font-size: 11px; }
 .timeline-item p, .muted-copy { margin: 5px 0 0; color: #94a0a6; font-size: 10px; }
 .review-panel { display: grid; gap: 17px; margin: 0 0 18px; padding: 24px 26px; border: 1px solid #e3e9ed; border-radius: 14px; background: #fff; box-shadow: 0 8px 28px #243b4b08; }
@@ -253,7 +260,9 @@ h1 { margin-bottom: 18px; color: #1e3447; font-size: clamp(38px, 5.2vw, 58px); f
 @media (max-width: 820px) {
   .page-shell { padding: 0 25px; }
   .auth-layout { grid-template-columns: 1fr 360px; gap: 28px; }
-  .detail-grid { grid-template-columns: 1fr; }
+  .detail-grid { grid-template-columns: minmax(0, 1fr); }
+  .detail-grid > .table-card { height: auto; max-height: min(72vh, 42rem); }
+  .detail-card-scroll, .history-card-scroll { flex: 1 1 auto; }
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .filter-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .search-filter { grid-column: 1 / -1; }
@@ -295,8 +304,8 @@ h1 { margin-bottom: 18px; color: #1e3447; font-size: clamp(38px, 5.2vw, 58px); f
   .review-actions .button { width: 100%; }
   .detail-list { grid-template-columns: 1fr; padding-right: 20px; padding-left: 20px; }
   .detail-list .detail-description { grid-column: auto; }
-  .attachment-content { padding-right: 20px; padding-left: 20px; }
   .attachment-file { align-items: flex-start; flex-direction: column; }
+  .detail-quotation { margin-right: 20px; margin-left: 20px; }
   .attachment-form-heading { align-items: flex-start; flex-direction: column; }
   .attachment-picker { align-self: flex-start; }
   .overview-heading { align-items: flex-start; flex-direction: column; }
