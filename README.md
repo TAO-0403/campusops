@@ -1,29 +1,28 @@
 # CampusOps
 
-CampusOps is an independent software development demonstration of a campus procurement request and review workflow. It brings request entry, administrator decisions, and the record of those decisions into one small web application. It has not been deployed or approved for use by any school and is not intended for real procurement decisions.
+CampusOps is a campus procurement request and approval demonstration built with React, TypeScript, FastAPI, and PostgreSQL.
 
-## Project overview
+## Features
 
-The intended users are campus staff or departments requesting supplies and administrators reviewing those requests. Requesters can create and manage their own drafts, submit requests, respond to returns, and view their request history. Administrators can search and review all requests, approve or return submissions, and inspect the complete history.
+- Sign-in, revocable server-side sessions, and requester/administrator permissions.
+- Drafts, submission, return, edits, resubmission, approval, and request activity history.
+- Server-side search, filters, sorting, pagination, overview metrics and charts, and administrator CSV export.
+- Optional PDF quotation uploads in request forms; replacement and deletion on editable requests; authorized viewing and download. Files are limited to 5 MB and stored privately on the local filesystem.
+- A transactional database outbox, separate SMTP worker, and failed-delivery retries. Submission and resubmission notify administrators; return and approval notify the applicant.
 
-The React and TypeScript single-page application calls a Python FastAPI REST API. FastAPI verifies an opaque, server-side session cookie and CSRF token, applies ownership and role checks, and uses PostgreSQL for users, departments, requests, sessions, and activity history. Passwords are stored as Argon2 hashes. Versioned SQL migrations evolve the schema without rebuilding the database.
+## Project status
 
-## Features and permissions
-
-| Role | Available actions |
-|---|---|
-| Requester | Create and edit own Draft requests; optionally upload, replace, or delete one quotation PDF on Draft or Returned requests; submit Draft requests; edit Returned requests and explicitly resubmit; view own requests and histories. |
-| Administrator | View and search all requests; approve or return Submitted requests; view request histories and quotation PDFs; export matching requests to CSV. |
-
-Submitted and Approved requests cannot be edited. A return requires a reason. Status changes and their history events are saved in one database transaction. The workspace includes server-side search, status and department filters, creation-time and amount sorting, pagination, and filtered aggregate request overviews.
+- Demonstration accounts and requests use fictional data. CampusOps has not been used by a school.
+- Email notifications have been verified through local Mailpit SMTP only.
+- Quotation files currently use private local storage.
+- Production deployment, load testing, and long-term operational metrics have not been completed.
 
 ## Technology stack
 
-- Frontend: React 19, TypeScript 5.8, Vite 6
-- Backend: Python 3.11, FastAPI, Pydantic, psycopg 3
-- Database: PostgreSQL 18
-- Authentication: Argon2 password hashing, server-side sessions, and CSRF protection
-- Tests: pytest with a separate `campusops_test` database
+- Frontend: React, TypeScript, Vite
+- Backend: Python, FastAPI, Pydantic, psycopg
+- Database: PostgreSQL
+- Tests: pytest using a separate `campusops_test` database
 
 ## Requirements
 
@@ -110,27 +109,13 @@ Remove-Item Env:CAMPUSOPS_ALLOW_DEMO_DATA
 
 The script uses the local `.env` database fields and does not print the database password. It is not part of the startup command and does not seed the test database.
 
-## Request review workflow
-
-Applicants can save and edit a draft, then submit it for review. Submitted requests are locked while an administrator reviews them. An administrator can approve a request with an optional comment or return it with a required reason. The applicant can edit a returned request; edits keep it in Returned until the applicant explicitly resubmits it. Every submission, resubmission, return, and approval is recorded with its actor, timestamp, status transition, and comment when provided.
-
-To try the full workflow, sign in as Alex, create and submit a request, then sign out. Sign in as Casey and open the submitted request to approve it or return it with a reason. To complete the return path, sign back in as Alex, edit the returned request, save the changes, and use **Resubmit for review**. Sign in as Casey again to approve the resubmitted request. The request detail timeline shows draft creation, request edits, submissions, returns, resubmissions, and approvals. Quotation attachment events remain in the database history but are not shown in this timeline.
-
-## Search and overview
-
-The workspace supports title search, status and department filters, creation-time or amount sorting, and 10- or 20-row pages. Search, filters, and sorting run on the server, and the result total is shown above the table. Administrators can select **Export CSV** to download every request matching the current search, status, department, and sort order; the export is independent of the selected page and page size. The server restricts this endpoint to administrators. Overview cards and charts use the same search and filters across all matching requests, independent of the selected page and sort order. **Approved amount** sums only requests in Approved status and is shown in USD; it does not represent paid or spent funds. The homepage service health check is inside the collapsed **Development information** section.
-
 ## Quotation attachments
 
-Applicants can select an optional PDF quotation in the request form and save it with the draft in one action. When editing a Draft or Returned request, they can stage a replacement or removal and apply it together with the request fields using **Save changes**. **Cancel** discards unsaved attachment changes. A request can be submitted without a quotation. Administrators can view and download quotations but cannot change them. Uploads must be valid PDF files no larger than 5 MB.
-
-Files are stored privately on the local filesystem in `data/attachments` by default. Set `CAMPUSOPS_ATTACHMENT_DIR` to use another local directory. The database stores only attachment metadata and a random storage identifier. The default attachment directory, including temporary upload files, is excluded from Git; if you configure a directory inside the repository, exclude it from Git as well. This local storage is not shared across application servers. Back up the PostgreSQL database and the attachment directory together, and restore both to the same deployment. Losing the local directory makes the corresponding database records unavailable; copying only the database does not back up the PDFs.
+Applicants can include an optional PDF (maximum 5 MB) when creating or editing a Draft or Returned request. They can replace or remove it before saving. Administrators and the owning applicant can view or download it when authorized. Files are stored in the private local `data/attachments` directory by default; `CAMPUSOPS_ATTACHMENT_DIR` selects another path. The database stores attachment metadata, not file contents. This storage is local to one host: back up the attachment directory together with PostgreSQL and restore both to the same deployment.
 
 ## Email notifications (local Mailpit)
 
-CampusOps can queue an email for administrators after a request is submitted or resubmitted, and for the applicant after an administrator returns or approves it. Return messages include the reason; approval messages include an optional comment. Draft saves, ordinary edits, and quotation attachment changes do not send email. Recipients are selected from active users by role. Messages include request details and a link to its authenticated detail page; quotation files are never attached.
-
-Email is disabled by default. To enable local testing, set these values in the local `.env` file (keep SMTP credentials empty for Mailpit):
+Notifications are disabled by default. For a local Mailpit demonstration, set the following in the local `.env` file:
 
 ```dotenv
 CAMPUSOPS_EMAIL_ENABLED=true
@@ -145,51 +130,19 @@ CAMPUSOPS_EMAIL_FROM=notifications@campusops.example.test
 CAMPUSOPS_FRONTEND_URL=http://127.0.0.1:5173
 ```
 
-For Windows, download the `mailpit-windows-amd64.zip` or `mailpit-windows-arm64.zip` binary from the [official Mailpit releases](https://github.com/axllent/mailpit/releases) and extract `mailpit.exe`. The [official installation guide](https://mailpit.axllent.org/docs/install/) documents the available binaries. Start it in PowerShell with `.\mailpit.exe`; it accepts SMTP on `127.0.0.1:1025` and provides the local inbox at `http://127.0.0.1:8025` by default.
+On Windows, download and extract `mailpit.exe` from the [official Mailpit releases](https://github.com/axllent/mailpit/releases), following the [official installation guide](https://mailpit.axllent.org/docs/install/). Run `.\mailpit.exe`; the local inbox is `http://127.0.0.1:8025` and SMTP listens on `127.0.0.1:1025` by default.
 
-Run the sender once to process one available notification:
+From the `backend` directory, process one queued message with:
 
 ```powershell
-cd D:\code\campusops\backend
 ..\.venv\Scripts\python.exe -m app.send_notifications --once
 ```
 
-For a local demo, leave the sender in foreground polling mode in a separate terminal:
-
-```powershell
-cd D:\code\campusops\backend
-..\.venv\Scripts\python.exe -m app.send_notifications --poll-interval 2 --retry-interval 30
-```
-
-Then sign in as an applicant, create and submit a request, and confirm the administrator email in Mailpit. Sign in as an administrator and return the request with a reason; confirm the applicant email. Sign back in as the applicant, edit and resubmit; confirm another administrator email. Finally sign in as an administrator and approve the request with an optional comment; confirm the applicant email. Open `http://127.0.0.1:8025` to inspect the local inbox. These steps verify local SMTP delivery to Mailpit only; they do not configure or demonstrate an external email service.
-
-The sender uses a PostgreSQL outbox and retries failed deliveries after the configured retry interval. SMTP cannot provide strict exactly-once delivery: if the SMTP server accepts a message but the worker stops before recording success, a retry can deliver a duplicate. Successfully recorded messages are not resent during normal processing. SMTP host, port, credentials, TLS/SSL, and timeout are environment-configurable for a later deployment, but this local setup sends only to Mailpit.
+For a local workflow demo, start the worker in foreground polling mode with `..\.venv\Scripts\python.exe -m app.send_notifications --poll-interval 2 --retry-interval 30`. Submit or resubmit a request to notify administrators; return or approve it to notify its applicant. This verifies delivery to Mailpit only, not an external email service. SMTP may redeliver if the server accepts a message but the worker stops before recording success; delivery is not exactly-once.
 
 ## Screenshots
 
-All screenshots show the real application with fictional demonstration data. CampusOps has not been put into use by any school.
-
-### Administrator workspace and overview
-
-![Administrator workspace with request totals, status and department charts, and the request register.](docs/screenshots/02-admin-dashboard.png)
-
-### Submitted requests filtered and sorted by amount
-
-![The request register filtered to Submitted requests and sorted from highest to lowest amount.](docs/screenshots/03-filtered-requests.png)
-
-### Applicant workspace
-
-![The applicant workspace showing Alex Morgan's requests and request overview.](docs/screenshots/04-applicant-dashboard.png)
-
-### Administrator review
-
-![An administrator reviewing a submitted request with optional approval comments and a required return reason.](docs/screenshots/06-admin-review.png)
-
-### Approved result and activity history
-
-![An approved request with its request activity timeline, including return and resubmission events.](docs/screenshots/08-approved-history.png)
-
-See the [complete screenshot showcase](docs/showcase.md) for all eight pages in sequence.
+[View screenshots](docs/showcase.md)
 
 ## Verification
 
@@ -207,6 +160,11 @@ cd D:\code\campusops\frontend
 npm run build
 ```
 
-## Current scope
+## Production considerations
 
-This standalone demonstration does not include school SSO, production account provisioning, attachments, email notifications, accounting or payment integration, procurement policy configuration, deployment, or production security review. Demo users and showcase requests are fictional. The application has not been put into school service.
+| Available in this demonstration | Work needed before production |
+|---|---|
+| API role, ownership, and CSRF checks; request status, activity event, and notification outbox are committed together. The SMTP worker claims tasks safely and retries failures. | Production identity and security review; managed secret handling and authenticated TLS SMTP; worker supervision, backlog monitoring, alerting, and retention policies. |
+| Quotation downloads are permission-checked and files are outside the public web directory. | Shared durable attachment storage for multiple servers, with coordinated database/file backups and tested restoration. |
+
+The outbox prevents business changes from depending on immediate SMTP availability, but SMTP delivery can still be duplicated at the acceptance/acknowledgement boundary. No production deployment, load test, or long-term reliability measurement has been completed.
