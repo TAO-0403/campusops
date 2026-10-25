@@ -126,6 +126,45 @@ Applicants can select an optional PDF quotation in the request form and save it 
 
 Files are stored privately on the local filesystem in `data/attachments` by default. Set `CAMPUSOPS_ATTACHMENT_DIR` to use another local directory. The database stores only attachment metadata and a random storage identifier. The default attachment directory, including temporary upload files, is excluded from Git; if you configure a directory inside the repository, exclude it from Git as well. This local storage is not shared across application servers. Back up the PostgreSQL database and the attachment directory together, and restore both to the same deployment. Losing the local directory makes the corresponding database records unavailable; copying only the database does not back up the PDFs.
 
+## Email notifications (local Mailpit)
+
+CampusOps can queue an email for administrators after a request is submitted or resubmitted, and for the applicant after an administrator returns or approves it. Return messages include the reason; approval messages include an optional comment. Draft saves, ordinary edits, and quotation attachment changes do not send email. Recipients are selected from active users by role. Messages include request details and a link to its authenticated detail page; quotation files are never attached.
+
+Email is disabled by default. To enable local testing, set these values in the local `.env` file (keep SMTP credentials empty for Mailpit):
+
+```dotenv
+CAMPUSOPS_EMAIL_ENABLED=true
+CAMPUSOPS_SMTP_HOST=127.0.0.1
+CAMPUSOPS_SMTP_PORT=1025
+CAMPUSOPS_SMTP_USERNAME=
+CAMPUSOPS_SMTP_PASSWORD=
+CAMPUSOPS_SMTP_TLS=false
+CAMPUSOPS_SMTP_SSL=false
+CAMPUSOPS_SMTP_TIMEOUT=5
+CAMPUSOPS_EMAIL_FROM=notifications@campusops.example.test
+CAMPUSOPS_FRONTEND_URL=http://127.0.0.1:5173
+```
+
+For Windows, download the `mailpit-windows-amd64.zip` or `mailpit-windows-arm64.zip` binary from the [official Mailpit releases](https://github.com/axllent/mailpit/releases) and extract `mailpit.exe`. The [official installation guide](https://mailpit.axllent.org/docs/install/) documents the available binaries. Start it in PowerShell with `.\mailpit.exe`; it accepts SMTP on `127.0.0.1:1025` and provides the local inbox at `http://127.0.0.1:8025` by default.
+
+Run the sender once to process one available notification:
+
+```powershell
+cd D:\code\campusops\backend
+..\.venv\Scripts\python.exe -m app.send_notifications --once
+```
+
+For a local demo, leave the sender in foreground polling mode in a separate terminal:
+
+```powershell
+cd D:\code\campusops\backend
+..\.venv\Scripts\python.exe -m app.send_notifications --poll-interval 2 --retry-interval 30
+```
+
+Then sign in as an applicant, create and submit a request, and confirm the administrator email in Mailpit. Sign in as an administrator and return the request with a reason; confirm the applicant email. Sign back in as the applicant, edit and resubmit; confirm another administrator email. Finally sign in as an administrator and approve the request with an optional comment; confirm the applicant email. Open `http://127.0.0.1:8025` to inspect the local inbox. These steps verify local SMTP delivery to Mailpit only; they do not configure or demonstrate an external email service.
+
+The sender uses a PostgreSQL outbox and retries failed deliveries after the configured retry interval. SMTP cannot provide strict exactly-once delivery: if the SMTP server accepts a message but the worker stops before recording success, a retry can deliver a duplicate. Successfully recorded messages are not resent during normal processing. SMTP host, port, credentials, TLS/SSL, and timeout are environment-configurable for a later deployment, but this local setup sends only to Mailpit.
+
 ## Screenshots
 
 All screenshots show the real application with fictional demonstration data. CampusOps has not been put into use by any school.

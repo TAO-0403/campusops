@@ -23,6 +23,7 @@ from app.dependencies import (
     require_admin_with_csrf,
     require_requester_with_csrf,
 )
+from app.notifications import enqueue_request_notification
 from app.schemas import ApprovalInput, RequestInput, ResubmitInput, ReturnInput
 
 router = APIRouter(tags=["purchase requests"])
@@ -194,15 +195,17 @@ def _record_event(
     previous_status: str | None,
     new_status: str,
     comment: str | None = None,
-) -> None:
-    connection.execute(
+) -> int:
+    row = connection.execute(
         """
         INSERT INTO request_events
             (request_id, actor_id, event_type, previous_status, new_status, comment)
         VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id
         """,
         (request_id, actor_id, event_type, previous_status, new_status, comment),
-    )
+    ).fetchone()
+    return row["id"]
 
 
 def _lock_owned_request(connection: Connection, request_id: int, user_id: int) -> dict:
@@ -682,8 +685,9 @@ def submit_request(
             "UPDATE purchase_requests SET status = 'Submitted', updated_at = now() WHERE id = %s",
             (request_id,),
         )
-        _record_event(connection, request_id, context.user["id"], "Submitted", "Draft", "Submitted")
+        event_id = _record_event(connection, request_id, context.user["id"], "Submitted", "Draft", "Submitted")
         result = _get_request(connection, request_id)
+        enqueue_request_notification(connection, event_id, result, "Submitted", None)
     return _serialize_request(result)
 
 
@@ -715,8 +719,10 @@ def approve_request(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Purchase request not found.")
         _require_status(row, "Submitted")
         connection.execute("UPDATE purchase_requests SET status = 'Approved', updated_at = now() WHERE id = %s", (request_id,))
-        _record_event(connection, request_id, context.user["id"], "Approved", "Submitted", "Approved", payload.comment.strip() or None)
+        comment = payload.comment.strip() or None
+        event_id = _record_event(connection, request_id, context.user["id"], "Approved", "Submitted", "Approved", comment)
         result = _get_request(connection, request_id)
+        enqueue_request_notification(connection, event_id, result, "Approved", comment)
     return _serialize_request(result)
 
 
@@ -734,8 +740,9 @@ def return_request(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Purchase request not found.")
         _require_status(row, "Submitted")
         connection.execute("UPDATE purchase_requests SET status = 'Returned', updated_at = now() WHERE id = %s", (request_id,))
-        _record_event(connection, request_id, context.user["id"], "Returned", "Submitted", "Returned", payload.reason)
+        event_id = _record_event(connection, request_id, context.user["id"], "Returned", "Submitted", "Returned", payload.reason)
         result = _get_request(connection, request_id)
+        enqueue_request_notification(connection, event_id, result, "Returned", payload.reason)
     return _serialize_request(result)
 
 
@@ -751,6 +758,8 @@ def resubmit_request(
         request_row = _get_request(connection, request_id)
         _validate_ready_for_submission(request_row)
         connection.execute("UPDATE purchase_requests SET status = 'Submitted', updated_at = now() WHERE id = %s", (request_id,))
-        _record_event(connection, request_id, context.user["id"], "Resubmitted", "Returned", "Submitted", payload.comment.strip() or None)
+        comment = payload.comment.strip() or None
+        event_id = _record_event(connection, request_id, context.user["id"], "Resubmitted", "Returned", "Submitted", comment)
         result = _get_request(connection, request_id)
+        enqueue_request_notification(connection, event_id, result, "Resubmitted", comment)
     return _serialize_request(result)

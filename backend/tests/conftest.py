@@ -26,6 +26,7 @@ def isolated_test_database(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     if not test_database.endswith("_test") or test_database == development_database:
         raise RuntimeError("Tests require a separate database whose name ends with '_test'.")
 
+    monkeypatch.setenv("CAMPUSOPS_EMAIL_ENABLED", "false")
     _require_test_database(test_database)
     monkeypatch.setenv("PGDATABASE", test_database)
     monkeypatch.setenv("CAMPUSOPS_ATTACHMENT_DIR", str(tmp_path / "attachments"))
